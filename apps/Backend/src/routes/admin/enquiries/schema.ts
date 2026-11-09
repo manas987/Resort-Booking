@@ -15,6 +15,9 @@ export const listEnquiriesQuerySchema = z.object({
   category: z.enum(['room', 'wedding', 'offsite', 'complaint']).optional(),
   source: z.enum(['website', 'email', 'whatsapp']).optional(),
   assignee: z.string().uuid().optional(),
+  /** Threads raised against one booking — what the Bookings drawer's "Open related enquiry"
+   *  link resolves. Scoping still applies on top (INV-38), so staff see only their own. */
+  bookingId: z.string().uuid().optional(),
   complaint: boolQuery,
   needsReview: boolQuery,
   unassigned: boolQuery,

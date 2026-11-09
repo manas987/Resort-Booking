@@ -97,5 +97,10 @@ export const POLICY = {
      *  plausible wedding/offsite, just enough to catch an obviously-malformed extraction
      *  (AV-6: 5,000 guests). */
     maxPlausibleGuestCount: 1000,
+    /** Drafting and retrying both spend a real provider call, and both are a button in the
+     *  console. Keyed per employee rather than per IP: the console sits behind one office
+     *  address, so an IP bucket would make colleagues share an allowance (INV-59). */
+    draftWindowSeconds: 300,
+    maxDraftsPerEmployee: 10,
   },
 } as const;

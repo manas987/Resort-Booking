@@ -1845,3 +1845,73 @@ Notes: **(4)** neither existed, and they are literally what the assignment asks 
        checked for leaked secrets. **(22/23)** Phase 4's status row now describes what exists,
        and 08-known-issues.md records that no rendered-UI verification has ever been possible
        here — which is why several visual defects reached the user.
+
+Pre-submission fixes — corpus, draft rate limit, deliverables, demo data
+Files: apps/Backend/src/core/policy.ts · src/routes/admin/enquiryDrafts/routes.ts
+       apps/Backend/seeds/run.ts · tests/enquiryDrafts.rateLimit.test.ts
+       Docs/{TDD.md,11-phase2-backend-staff.md,tests-phase2.md,03-decisions.md} · deployment.md
+Ran:   backend check-types clean · bun test → **329 pass / 0 fail / 10 skip across 34 files**
+       frontend check-types · lint · check (41 pass) · build → clean
+Notes: **(1) The AI corpus held 2 of its 7 sections.** The seed has defined all seven since 2G,
+       but this database was seeded before five of them were written and `seed` refuses a
+       non-empty database — so the drafter was grounded in `booking_terms` and `faq` alone and
+       answered most room, amenity, arrival, wedding and offsite questions with "our team will
+       confirm". Inserted the five missing sections from the seed's own `RESORT_INFO` (now
+       exported rather than retyped), guarded by `NOT EXISTS` so the two existing sections kept
+       their version rather than being superseded.
+       **(2)** `POST /enquiryDrafts/:id` and `/retry` had no limiter, and both spend a real
+       provider call from a button. One bucket per employee for the pair (`POLICY.ai`,
+       DR-1..DR-3): a limiter per route would let `/retry` double the allowance, and an IP key
+       would make one office share one allowance.
+       **(3)** Seven seeded enquiries had **no messages at all** — a state neither
+       `POST /api/user/enquiries` nor the inbound injector can produce, and a detail page with
+       nothing in it. The seed now writes a guest message per enquiry, matched to the row it
+       belongs to (the low-confidence one really is ambiguous; the reopened one has three
+       messages across its own three-day timeline). Backfilled the existing rows the same way.
+       **(4)** deployment.md gained the six §31 items it was missing: reviewer accounts, Vercel,
+       Railway (two services, one database), Google callback setup, known deployment limitations,
+       and corrected test counts. TDD.md §11's console bullet was **stale and understated the
+       work** — it still claimed six screens read fixtures; replaced with what is actually true,
+       plus the two approximations in `liveReport.ts` and the 1.88 MB Mapbox chunk.
+Verify: `SELECT key FROM resort_info WHERE is_current` → 7 rows. Re-ran the real pipeline on
+       ENQ-4411 (live Gemini, confidence 0.99): the draft now cites the estate's location and
+       the included breakfast and estate walk — facts that were not in the corpus an hour ago.
+       `SELECT count(*) FROM enquiries WHERE NOT EXISTS (… enquiry_messages …)` → 0.
+       ENQ-8104 and ENQ-1519 (created while verifying the console) deleted; their `audit_events`
+       rows remain, which is INV-14 working.
+Open:  two manually-submitted test enquiries (ENQ-2312, ENQ-6872) still carry the user's real
+       name and personal email, and one contains a slur. Deleting them was blocked by the
+       sandbox; raised with the user instead.
+
+Checkout showed "Sign in to book" to a guest who was already signed in
+Files: src/lib/api.ts · src/lib/session.ts · src/App.tsx · src/components/{Checkout,CheckoutSignIn}.tsx
+       checks/guest-booking-ui.test.tsx · Docs/{14-frontend-api-map.md,08-known-issues.md}
+Ran:   frontend check-types · lint · check (**42 pass**) · build → clean
+       backend check-types · bun test → 329 pass / 0 fail / 10 skip, 34 files (untouched; regression gate)
+Notes: **Two independent causes, both real.**
+       **(1) The guest app never restored its session on boot.** The access token lives in
+       memory, so a reload leaves only the httpOnly refresh cookie, and the only thing that ever
+       traded it back was `api.ts`'s silent retry on a 401. `/checkout` provokes no 401 —
+       `/rooms` is public, `POST /quotes` runs under `optionalGuest`, `GET /quotes/:id` answers
+       404 not 401 (INV-34) — so it was the one screen that never restored, and the one screen
+       whose right-hand column branches entirely on being signed in. `14-frontend-api-map.md`
+       had claimed the boot call existed since phase 3; it never did. The console has had
+       `restoreStaffSession()` since it was wired, so the staff side never had the bug.
+       **(2) Google sign-in verifies an email and nothing else.** `requireVerifiedGuest` needs
+       both contacts, so a Google guest is signed in and still cannot book — and sending them
+       back through the email round verifies what is already verified. `CheckoutSignIn` now
+       detects `emailVerified && !phoneVerified` and goes straight to the phone code.
+       **No UI changes.** The restoring window reuses the `LoadingSkeleton` the page already
+       renders twice and disables the existing button; no markup, class or copy changed.
+Verify: against the running API — `POST /auth/refresh` with the cookie ALONE returns
+       `{accessToken, principal}` with both contacts verified (200), and with no cookie returns
+       401, which is what ends the restoring window for an anonymous visitor. The restored token
+       then reads `/auth/me` and `/bookings` 200 where no token gets 401.
+       The Google path was exercised for real by clearing `phone_verified_at` on the demo guest:
+       `POST /bookings` → **403** (exactly the state in the screenshot), then
+       `contact/verify-start` → `demoCode`, then `otp/verify` purpose `verify_phone` →
+       principal with `phoneVerified: true`. Demo guest confirmed back to its original state.
+Open:  the dev database shows this is what the user hit — their own account is `google=true`,
+       `email_verified=true`, `phone_verified=false`, no phone at all. Checkout still *says*
+       "Sign in to book" to such a guest; the button now leads somewhere that works in one step,
+       but the wording is wrong and copy is UI.

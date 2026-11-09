@@ -219,6 +219,17 @@ and routing under test are real.
 | AU-5 | Any audit row | Contains actor, action, target, before/after, `requestId` — and **no** password, OTP or token (INV-53) |
 | AU-6 | Audit list | Paginated with actor/action/target/date filters |
 
+## enquiryDrafts.rateLimit.test.ts — 2D
+
+Both AI routes spend a real provider call and both are a button in the console. Added after the
+console was wired, when the button became reachable.
+
+| ID | Case | Assert |
+|---|---|---|
+| DR-1 | `POLICY.ai.maxDraftsPerEmployee` generate calls, then one more | The first ten are accepted, the eleventh is `429 rate_limited` with `Retry-After` |
+| DR-2 | A colleague drafts after the first employee is exhausted | Accepted. The bucket is keyed on the principal, not the IP |
+| DR-3 | `/retry` after the generate allowance is spent | Refused. One bucket for the pair, so `/retry` cannot double the allowance |
+
 ## Cross-cutting checks — run at the end of phase 2
 
 | ID | Assert |

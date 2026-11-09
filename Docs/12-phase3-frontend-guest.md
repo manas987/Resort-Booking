@@ -1,5 +1,20 @@
 # Phase 3 — frontend guest
 
+## Submission fixes — 9 Nov
+
+Checkout has internal review/pay steps, with no new route. Any signed-in guest can submit
+the browser-validated main-guest form to reach Checkout. The pay step keeps verification,
+all existing conflict/price/expiry notices and the authoritative API total visible. The
+sample card fields are read-only decoration: never stored or sent. Payment uses the existing
+mock booking/payment/worker path. Payment remains gated on verified email/phone and completed
+onboarding; signed-out guests still go to /signin. Session-restoration guards are retained.
+
+Sign-in is email-first via OAuth or OTP. A returning verified identity enters immediately.
+An unknown email creates a provisional guest only AFTER valid OTP proof; phone verification
+and name confirmation complete onboarding. Google supplies the suggested editable name.
+The additive migration 002_guest_onboarding.sql persists this state and preserves existing
+accounts. /auth/me returns the caller's profile and needsOnboarding; tokens remain in memory.
+
 Builds the guest site against the complete guest API (27 endpoints + 3B's calendar one).
 `Implimnetation.md`'s status table says which sub-phase is next; `progress-log.md` records
 what each finished one actually shipped and what proved it.

@@ -8,4 +8,10 @@ export const publishResortInfoSchema = z.object({
 
 export const readResortInfoQuerySchema = z.object({
   key: z.string().trim().min(1).max(100).optional(),
+  /** Include superseded versions, newest first. Rows are never edited in place — publishing
+   *  writes a new version — so the history is simply the other rows for that key. */
+  history: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
 });

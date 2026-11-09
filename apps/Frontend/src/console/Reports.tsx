@@ -1,8 +1,8 @@
 import { DateInput } from '../components/FormControls';
-import { useState } from 'react';
-import { useConsole } from './store';
+import { useEffect, useState } from 'react';
+import { adminFetch } from './api';
 import { dateText, datesBetween, money } from './model';
-import { report } from './reporting';
+import { useLiveReport } from './liveReport';
 import { Empty, Field, Metrics, PageHeading, Table } from './ui';
 export function ValueChart({ points }: { points: { date: string; value: number }[] }) {
   const [focused, setFocused] = useState<number | null>(null);
@@ -62,13 +62,23 @@ export function ValueChart({ points }: { points: { date: string; value: number }
     </div>
   );
 }
+type StaffMember = { id: string; name: string; role: string; team: string | null; isActive: boolean };
+
 export default function Reports() {
-  const { state } = useConsole();
   const [from, setFrom] = useState('2026-11-01');
   const [to, setTo] = useState('2026-11-30');
   const [tab, setTab] = useState('Bookings & value');
-  const r = report(state, from, to);
   const valid = datesBetween(from, to).length > 0;
+  const { data: r, error, loading, refetch } = useLiveReport(from, to, valid);
+  const [employees, setEmployees] = useState<StaffMember[]>([]);
+
+  // The workload table names people, so it needs the staff list. Owner-only screen, and
+  // `/staff` is requireGm, so an owner always clears the guard.
+  useEffect(() => {
+    adminFetch<{ staff: StaffMember[] }>('/staff')
+      .then((body) => setEmployees(body.staff.filter((e) => e.isActive)))
+      .catch(() => setEmployees([]));
+  }, []);
   return (
     <>
       <PageHeading
@@ -94,6 +104,15 @@ export default function Reports() {
       </div>
       {!valid ? (
         <Empty title="Check the date range" text="Select a start and end date within a two-year window." />
+      ) : error ? (
+        <p className="c-error" role="alert">
+          {error}{' '}
+          <button type="button" className="c-linkish" onClick={() => void refetch()}>
+            Try again
+          </button>
+        </p>
+      ) : loading || !r ? (
+        <p role="status">Loading the report…</p>
       ) : tab === 'Bookings & value' ? (
         <>
           <Metrics
@@ -179,7 +198,7 @@ export default function Reports() {
             </div>
           </section>
           <Table
-            rows={state.employees.filter((e) => e.active)}
+            rows={employees}
             id={(e) => e.id}
             columns={[
               { key: 'name', label: 'Employee', render: (e) => e.name },
@@ -188,17 +207,13 @@ export default function Reports() {
                 key: 'open',
                 label: 'Open assignments',
                 numeric: true,
-                render: (e) => r.threads.filter((t) => t.assignee === e.id && t.status !== 'Resolved').length,
+                render: (e) => r.threads.filter((t) => t.assignee === e.id && t.status !== 'resolved').length,
               },
               {
                 key: 'waiting',
                 label: 'Without a delivered reply',
                 numeric: true,
-                render: (e) =>
-                  r.threads.filter(
-                    (t) =>
-                      t.assignee === e.id && !t.messages.some((m) => m.kind === 'staff' && m.delivery === 'Delivered'),
-                  ).length,
+                render: (e) => r.threads.filter((t) => t.assignee === e.id && t.awaitingReply).length,
               },
             ]}
           />

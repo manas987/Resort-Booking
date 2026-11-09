@@ -62,6 +62,14 @@ async function refreshOnce(): Promise<boolean> {
   return refreshInFlight;
 }
 
+/** Called once when the app mounts: a valid `resort_refresh` cookie means an already-signed-in
+ *  guest should not be shown a sign-in button after a reload. Without this, the ONLY thing that
+ *  turned the cookie back into a session was a 401 — and `/checkout` issues no authenticated
+ *  request, so it never got one. Mirrors `console/api.ts`'s `restoreStaffSession`. */
+export async function restoreGuestSession(): Promise<boolean> {
+  return refreshOnce();
+}
+
 async function send(path: string, options: RequestOptions): Promise<Response> {
   const headers: Record<string, string> = {};
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';

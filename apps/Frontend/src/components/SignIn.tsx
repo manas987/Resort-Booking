@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { CheckoutSignIn } from './CheckoutSignIn';
+import { usePrincipal } from '../lib/session';
 
 /**
  * `/signin` — the standalone sign-in page. Its visual shell is unchanged; what changed is
@@ -20,6 +21,7 @@ import { CheckoutSignIn } from './CheckoutSignIn';
  * `/auth/callback#accessToken=` (handled in `App.tsx`).
  */
 export function SignIn({ onComplete, onBack }: { onComplete: () => void; onBack: () => void }) {
+  const principal = usePrincipal();
   const [googleError, setGoogleError] = useState('');
 
   function continueWithGoogle() {
@@ -57,9 +59,9 @@ export function SignIn({ onComplete, onBack }: { onComplete: () => void; onBack:
           <h1>Come on in.</h1>
           <p className="signin-intro">Sign in or create an account to continue your stay.</p>
 
-          <button type="button" className="signin-google" onClick={continueWithGoogle}>
+          {!principal && <button type="button" className="signin-google" onClick={continueWithGoogle}>
             Continue with Google
-          </button>
+          </button>}
           {googleError && (
             <p className="signin-error" role="alert">
               {googleError}

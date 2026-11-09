@@ -19,6 +19,10 @@ export type StaffPrincipal = {
   kind: 'employee';
   role: 'staff' | 'gm' | 'owner';
   team: 'reservations' | 'sales' | null;
+  /** Display name and username, returned alongside the session (never inside the JWT). The
+   *  console used to show a FIXTURE employee's name here — the wrong person, confidently. */
+  name: string;
+  username: string | null;
 };
 
 export class AdminApiError extends Error {
@@ -131,6 +135,27 @@ export async function adminFetch<T>(path: string, options: RequestOptions = {}):
     );
   }
   return body as T;
+}
+
+/**
+ * Downloads a file the API generates, through the same authenticated path as every other call
+ * — `adminFetch` already returns non-JSON bodies as text, and the browser cannot put an
+ * `Authorization` header on a plain link, so a bare `<a href>` to an admin route would simply
+ * be rejected.
+ *
+ * The BOM is what makes Excel read the file as UTF-8; without it a guest name with a non-ASCII
+ * character is mangled on open. The server's own spreadsheet-injection guard (INV-51) is
+ * untouched here — this function never edits the bytes it was given.
+ */
+export async function downloadAdminFile(path: string, filename: string): Promise<void> {
+  const csv = await adminFetch<string>(path);
+  const blob = new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export async function staffLogin(username: string, password: string): Promise<StaffPrincipal> {

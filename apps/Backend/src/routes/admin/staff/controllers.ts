@@ -49,11 +49,19 @@ function toPublicShape(row: StaffRow) {
 
 export async function readStaffController(_request: Request, response: Response, next: NextFunction): Promise<void> {
   try {
-    const { rows } = await pool.query<StaffRow>(
-      `SELECT id, username, email, name, role, team, is_active
-         FROM users WHERE kind = 'employee' ORDER BY created_at`,
+    // `lastSignInAt` is the newest session issued to that employee. There is no
+    // `users.last_login_at` column and inventing one would need a migration; a session row IS
+    // the record of a sign-in, so it answers the question without adding state to maintain.
+    const { rows } = await pool.query<StaffRow & { last_sign_in_at: string | null }>(
+      `SELECT u.id, u.username, u.email, u.name, u.role, u.team, u.is_active, s.created_at AS last_sign_in_at
+         FROM users u
+         LEFT JOIN LATERAL (
+           SELECT created_at FROM sessions WHERE user_id = u.id ORDER BY created_at DESC LIMIT 1
+         ) s ON TRUE
+        WHERE u.kind = 'employee'
+        ORDER BY u.created_at`,
     );
-    response.status(200).json({ staff: rows.map(toPublicShape) });
+    response.status(200).json({ staff: rows.map((row) => ({ ...toPublicShape(row), lastSignInAt: row.last_sign_in_at })) });
   } catch (error) {
     next(error);
   }

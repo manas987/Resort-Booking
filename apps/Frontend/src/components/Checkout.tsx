@@ -1,3 +1,4 @@
+import { CheckoutSignIn } from './CheckoutSignIn';
 import { LoadingSkeleton } from './LoadingSkeleton';
 import { Select } from './FormControls';
 import { useEffect, useRef, useState } from 'react';
@@ -6,7 +7,7 @@ import { ArrowLeft, ArrowUpRight, BedDouble } from 'lucide-react';
 import { apiFetch, ApiError, isInFlightReplay } from '../lib/api';
 import { reviewerToolsEnabled } from '../lib/reviewerTools';
 import { formatPaise } from '../lib/money';
-import { usePrincipal } from '../lib/session';
+import { usePrincipal, useSessionRestoring } from '../lib/session';
 import { idempotentRequest, clearIdempotentRequest } from '../lib/idempotency';
 import { stayLabel, stayNights, toQuoteLineItems, linesForRoomType, updateOccupancy, type Cart } from '../data/cart';
 import type {
@@ -25,6 +26,9 @@ const POLL_TIMEOUT_MS = 30_000;
 export function Checkout({ arrival, departure, cart, onCart, onSignIn }: Props) {
   const [, navigate] = useLocation();
   const principal = usePrincipal();
+  // The refresh-cookie bootstrap in App.tsx has not answered yet. "Signed out" is not yet known
+  // to be true, and this page's whole right-hand column branches on it.
+  const restoringSession = useSessionRestoring();
   const nights = stayNights(arrival, departure);
   const dates = new URLSearchParams({ arrival, departure });
 
@@ -34,6 +38,7 @@ export function Checkout({ arrival, departure, cart, onCart, onSignIn }: Props) 
   const roomTypes = [...new Map(cart.map((line) => [line.roomTypeId, line])).values()];
   const verified = !!principal?.emailVerified && !!principal?.phoneVerified;
   const quoteRequest = useRef(0);
+  const [step, setStep] = useState<'review' | 'pay'>('review');
   const [quoteKey, setQuoteKey] = useState('');
   const [quote, setQuote] = useState<QuoteResponse | null>(null);
   const [quoteError, setQuoteError] = useState('');
@@ -253,7 +258,7 @@ export function Checkout({ arrival, departure, cart, onCart, onSignIn }: Props) 
   }
 
   const currentQuote = quoteKey === quoteSignature(promoApplied) ? quote : null;
-  const canPay = !!currentQuote && !quoteError && !quoteLoading && verified && !!guestName.trim() && !!guestEmail.trim() && !!guestPhone.trim();
+  const canPay = !!currentQuote && !quoteError && !quoteLoading && verified && principal?.onboardingComplete !== false && !!guestName.trim() && !!guestEmail.trim() && !!guestPhone.trim();
 
   function changeCart(next: Cart) {
     if (paying) return;
@@ -275,11 +280,11 @@ export function Checkout({ arrival, departure, cart, onCart, onSignIn }: Props) 
 
   return <div className="booking-page checkout-page">
     <header className="booking-header"><Link href={`/book/select?${dates}`}><ArrowLeft size={15} /> Room selection</Link><Link href="/" className="booking-wordmark">THE QUIET ESTATE</Link></header>
-    <div className="checkout-heading"><span className="room-eyebrow">YOUR TIME AWAY</span><h1>Review your stay.</h1><p>{stayLabel(arrival, departure)} · {nights} nights</p></div>
+    <div className="checkout-heading"><span className="room-eyebrow">YOUR TIME AWAY</span><h1>{step === 'review' ? 'Review your stay.' : 'Complete your stay.'}</h1><p>{stayLabel(arrival, departure)} · {nights} nights</p></div>
 
     <div className="checkout-layout">
       <div className="checkout-items">
-        <h2 className="checkout-section-title">Your rooms <span>{cart.length} selected</span></h2>
+        {step === 'review' && <><h2 className="checkout-section-title">Your rooms <span>{cart.length} selected</span></h2>
         {catalogueError && <p className="checkout-media-error">Room photos couldn't load. <button className="room-inline-link" onClick={retryCatalogue}>Try again</button></p>}
         {roomTypes.map((line) => {
           const room = catalogue?.rooms.find((item) => item.id === line.roomTypeId);
@@ -300,14 +305,15 @@ export function Checkout({ arrival, departure, cart, onCart, onSignIn }: Props) 
             </details>
           </article>;
         })}
-        <Link className="room-inline-link" href={`/book/select?${dates}`}>Edit selection <ArrowUpRight size={15} /></Link>
+        <Link className="room-inline-link" href={`/book/select?${dates}`}>Edit selection <ArrowUpRight size={15} /></Link></>}
 
         {existingReference && <div className="checkout-notice" role="alert">This stay is already booked. <Link href={`/booking/${existingReference}`}>View your booking <ArrowUpRight size={14} /></Link></div>}
         {conflictNights && <div className="checkout-notice" role="alert">These nights are no longer available: {conflictNights.join(', ')}. <Link href={`/book/select?${dates}`}>Change your selection</Link></div>}
         {priceChanged && <div className="checkout-notice" role="alert">Prices changed — new total {formatPaise(priceChanged.totalPaise)}. <button type="button" className="room-inline-link" onClick={acknowledgePriceChange}>Accept the new total</button></div>}
         {bookingError && <p role="alert" className="signin-error">{bookingError}</p>}
 
-        {verified ? <form id="checkout-guest" className="checkout-contact" onSubmit={(event) => { event.preventDefault(); void payNow(); }}>
+        {restoringSession ? <section className="checkout-auth"><LoadingSkeleton label="Checking your sign-in…" rows={2} /></section>
+          : principal && step === 'review' ? <form id="checkout-guest" className="checkout-contact" onSubmit={(event) => { event.preventDefault(); setStep('pay'); }}>
           <h2>Main guest</h2><p>Who should we confirm the booking with?</p><fieldset disabled={paying}>
           <label htmlFor="co-guest-name">Name</label>
           <input id="co-guest-name" autoComplete="name" required maxLength={200} value={guestName} onChange={(e) => setGuestName(e.target.value)} />
@@ -315,8 +321,16 @@ export function Checkout({ arrival, departure, cart, onCart, onSignIn }: Props) 
           <input id="co-guest-email" type="email" autoComplete="email" required value={guestEmail} onChange={(e) => setGuestEmail(e.target.value)} />
           <label htmlFor="co-guest-phone">Mobile number</label>
           <div className="signin-phone"><span>+91</span><input id="co-guest-phone" type="tel" inputMode="numeric" pattern="[6-9][0-9]{9}" minLength={10} maxLength={10} required value={guestPhone} onChange={(e) => setGuestPhone(e.target.value.replace(/\D/g, ''))} /></div>
-        </fieldset></form> : <section className="checkout-auth">
+        </fieldset></form> : !principal ? <section className="checkout-auth">
           <div><h2>Make it your stay.</h2><p>Sign in to add your details and complete your booking.</p></div>
+        </section> : null}
+        {principal && step === 'pay' && <section className="checkout-contact">
+          <button type="button" className="room-inline-link" disabled={paying} onClick={() => setStep('review')}><ArrowLeft size={14} /> Back to review</button>
+          {(!verified || principal.onboardingComplete === false) && <><h2>Verify your details</h2><CheckoutSignIn verificationOnly onVerified={() => {}} /></>}
+          <h2>Test payment</h2><p>Sample card details only. No real card is collected or charged.</p>
+          <label htmlFor="sample-card">Card number</label><input id="sample-card" value="4242 4242 4242 4242" readOnly autoComplete="off" />
+          <label htmlFor="sample-holder">Name on card</label><input id="sample-holder" value="Sample Guest" readOnly autoComplete="off" />
+          <div className="checkout-card-row"><label>Expiry<input value="12 / 30" readOnly autoComplete="off" /></label><label>CVV<input value="123" readOnly autoComplete="off" /></label></div>
         </section>}
       </div>
 
@@ -335,7 +349,7 @@ export function Checkout({ arrival, departure, cart, onCart, onSignIn }: Props) 
           <div><input id="co-promo" aria-label="Promo code" disabled={paying} value={promoInput} onChange={(e) => setPromoInput(e.target.value)} placeholder="Optional" /><button type="button" disabled={paying || quoteLoading} onClick={applyPromo}>Apply</button></div>
           {promoMessage && <small>{promoMessage}</small>}
         </details>
-        {reviewerToolsEnabled && principal?.emailVerified && principal?.phoneVerified && <div className="checkout-pay-outcome">
+        {step === 'pay' && reviewerToolsEnabled && principal?.emailVerified && principal?.phoneVerified && <div className="checkout-pay-outcome">
           <label htmlFor="co-outcome">Payment outcome</label>
           <Select id="co-outcome" value={payOutcome} onChange={(e) => setPayOutcome(e.target.value as PaymentAttemptOutcome)}>
             <option value="succeed">Succeed</option>
@@ -343,8 +357,9 @@ export function Checkout({ arrival, departure, cart, onCart, onSignIn }: Props) 
             <option value="succeed_late">Succeed (late)</option>
           </Select>
         </div>}
-        {verified ? <button type="submit" form="checkout-guest" className="booking-primary" disabled={!canPay || paying}>{paying ? 'Processing…' : 'Pay now'}<ArrowUpRight size={16} /></button>
-          : <button type="button" className="booking-primary" onClick={onSignIn}>Sign in to book <ArrowUpRight size={16} /></button>}
+        {principal ? step === 'review' ? <button type="submit" form="checkout-guest" className="booking-primary" disabled={restoringSession || quoteLoading || !currentQuote || !!quoteError}>Checkout <ArrowUpRight size={16} /></button>
+          : <button type="button" className="booking-primary" disabled={!canPay || paying} onClick={() => void payNow()}>{paying ? 'Processing…' : 'Pay now'}<ArrowUpRight size={16} /></button>
+          : <button type="button" className="booking-primary" disabled={restoringSession} onClick={onSignIn}>Sign in to book <ArrowUpRight size={16} /></button>}
         <small>No charge will be made.</small>
       </aside>
     </div>

@@ -105,8 +105,13 @@ export async function readMetricsController(request: Request, response: Response
     }
 
     const { rows: resolvedRows } = await pool.query<{ created_at: string; resolved_at: string; reopened_count: number }>(
+      // `resolved_at >= created_at` excludes the impossible, not the inconvenient: a thread
+      // resolved before it was raised is corrupt data, and averaging it in silently turns an
+      // owner-facing figure negative. Excluded rather than clamped to zero, so `measuredCount`
+      // stays an honest count of what was actually measurable.
       `SELECT created_at, resolved_at, reopened_count FROM enquiries
-        WHERE resolved_at IS NOT NULL AND resolved_at::date BETWEEN $1::date AND $2::date`,
+        WHERE resolved_at IS NOT NULL AND resolved_at >= created_at
+          AND resolved_at::date BETWEEN $1::date AND $2::date`,
       [from, to],
     );
     const resolutionMinutes = resolvedRows.map((r) => (new Date(r.resolved_at).getTime() - new Date(r.created_at).getTime()) / 60_000);

@@ -1,23 +1,104 @@
 import { Select, DateInput } from '../components/FormControls';
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { CalendarDays, Download, List, ArrowLeft, ArrowRight } from 'lucide-react';
-import { useConsole } from './store';
-import {
-  bookingCSV,
-  bookingValue,
-  canExport,
-  dateText,
-  datesBetween,
-  money,
-  nights,
-  now,
-  type Booking,
-} from './model';
+import { adminFetch, AdminApiError, downloadAdminFile, getStaffPrincipal } from './api';
+import { canExportRole, dateText, datesBetween, money } from './model';
 import { Badge, Drawer, Empty, Field, PageHeading, SearchBox, Table } from './ui';
+
+/**
+ * Bookings, read from the database through `GET /admin/bookings`. Read-only by design — dates,
+ * rooms, cancellation and refunds are out of scope (§29), so this screen has no mutation.
+ *
+ * Purchased amounts are the SNAPSHOT the guest paid, never a recomputation at today's rates:
+ * every figure here comes from the booking's own columns. That is the property §32 asks a
+ * reviewer to confirm after a GM changes a rate.
+ *
+ * The CSV is `GET /exports/bookings.csv` (`requireExporter` — not sales, INV-37). It used to be
+ * assembled in the browser from fixtures, which meant the file a reviewer downloaded was not the
+ * file the backend produces, and the spreadsheet-injection guard (INV-51) was never exercised.
+ */
+
+type RoomLine = { roomTypeId: string; roomName: string; quantity: number };
+type BookingApiRow = {
+  bookingId: string;
+  reference: string;
+  status: 'confirmed' | 'pending_payment' | 'payment_failed' | 'expired';
+  checkIn: string;
+  checkOut: string;
+  guestName: string;
+  guestEmail: string;
+  guestPhone: string;
+  totalPaise: number;
+  holdExpiresAt: string | null;
+  confirmedAt: string | null;
+  createdAt: string;
+  paymentStatus: string | null;
+  refundStatus: string | null;
+  rooms: RoomLine[];
+};
+type BookingRow = {
+  id: string;
+  bookingId: string;
+  guest: string;
+  email: string;
+  phone: string;
+  arrival: string;
+  departure: string;
+  lines: RoomLine[];
+  status: string;
+  payment: string;
+  confirmed: string;
+  holdUntil: string | null;
+  total: number;
+};
+
+const STATUS_LABEL: Record<BookingApiRow['status'], string> = {
+  confirmed: 'Confirmed',
+  pending_payment: 'Pending payment',
+  payment_failed: 'Payment failed',
+  expired: 'Expired',
+};
+
+/** One badge for a booking's money state. A refund supersedes the payment that preceded it —
+ *  the late-payment recovery path records a succeeded payment AND a refund, and showing
+ *  "Succeeded" there would misdescribe it. */
+function paymentLabel(row: BookingApiRow): string {
+  // `refunds.status` is one of refund_pending | refunded | refund_failed (001_init.sql), NOT
+  // the payments vocabulary — they are different columns with different check constraints.
+  if (row.refundStatus === 'refunded') return 'Refunded';
+  if (row.refundStatus === 'refund_failed') return 'Refund failed';
+  if (row.refundStatus === 'refund_pending') return 'Processing';
+  if (row.paymentStatus === 'succeeded') return 'Succeeded';
+  if (row.paymentStatus === 'failed') return 'Failed';
+  return 'Processing';
+}
+
+function toRow(row: BookingApiRow): BookingRow {
+  return {
+    id: row.reference,
+    bookingId: row.bookingId,
+    guest: row.guestName,
+    email: row.guestEmail,
+    phone: row.guestPhone,
+    arrival: row.checkIn,
+    departure: row.checkOut,
+    lines: row.rooms,
+    status: STATUS_LABEL[row.status],
+    payment: paymentLabel(row),
+    confirmed: row.confirmedAt ?? row.createdAt,
+    holdUntil: row.holdExpiresAt,
+    total: row.totalPaise,
+  };
+}
+
+function nightsBetween(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000);
+}
 export default function Bookings() {
-  const { state, actor, exec, navigate } = useConsole();
-  const [path] = useLocation();
+  const [path, navigate] = useLocation();
+  const principal = getStaffPrincipal();
+  const actor = { role: principal?.role ?? 'staff', team: principal?.team ?? null };
   const [view, setView] = useState('List');
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
@@ -29,18 +110,48 @@ export default function Bookings() {
   const [exporting, setExporting] = useState(false);
   const [month, setMonth] = useState('2026-11');
   const [calendarView, setCalendarView] = useState('Month');
-  const selected = state.bookings.find((b) => b.id === path.split('/')[3]);
-  const rows = state.bookings.filter(
+  const [fetched, setFetched] = useState<BookingApiRow[]>([]);
+  const [roomTypes, setRoomTypes] = useState<Array<{ id: string; name: string }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const body = await adminFetch<{ items: BookingApiRow[] }>('/bookings?limit=100');
+      setFetched(body.items);
+    } catch (failure) {
+      setError(failure instanceof AdminApiError ? failure.message : 'Could not load bookings.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void Promise.resolve().then(load);
+  }, [load]);
+
+  useEffect(() => {
+    // The filter only needs names, so no window is sent — the endpoint defaults it.
+    adminFetch<{ rooms: Array<{ id: string; name: string }> }>('/rooms')
+      .then((body) => setRoomTypes(body.rooms.map((r) => ({ id: r.id, name: r.name }))))
+      .catch(() => setRoomTypes([]));
+  }, []);
+
+  const all = fetched.map(toRow);
+  const openReference = path.split('/')[3];
+  const selected = all.find((b) => b.bookingId === openReference || b.id === openReference);
+  const rows = all.filter(
     (b) =>
       `${b.id} ${b.guest} ${b.email} ${b.phone}`.toLowerCase().includes(search.toLowerCase()) &&
       (!status || b.status === status) &&
       (!payment || b.payment === payment) &&
-      (!room || b.lines.some((l) => l.room === room)) &&
+      (!room || b.lines.some((l) => l.roomTypeId === room)) &&
       (basis === 'Stay dates'
         ? b.arrival <= to && b.departure > from
         : b.confirmed.slice(0, 10) >= from && b.confirmed.slice(0, 10) <= to),
   );
-  const roomName = (id: string) => state.rooms.find((r) => r.id === id)?.name;
   const [week, setWeek] = useState('2026-11-09');
   const weekEnd = new Date(`${week}T12:00:00Z`);
   weekEnd.setUTCDate(weekEnd.getUTCDate() + 6);
@@ -77,7 +188,7 @@ export default function Bookings() {
                 <CalendarDays size={16} /> Calendar
               </button>
             </div>
-            {canExport(actor) && (
+            {canExportRole(actor.role, actor.team) && (
               <button className="c-primary" onClick={() => setExporting(true)}>
                 <Download size={15} /> Download CSV
               </button>
@@ -101,7 +212,7 @@ export default function Bookings() {
         </Select>
         <Select aria-label="Room type" value={room} onChange={(e) => setRoom(e.target.value)}>
           <option value="">All room types</option>
-          {state.rooms.map((r) => (
+          {roomTypes.map((r) => (
             <option value={r.id} key={r.id}>
               {r.name}
             </option>
@@ -141,11 +252,20 @@ export default function Bookings() {
           The end date must be on or after the start date.
         </p>
       )}
+      {error && (
+        <p className="c-error" role="alert">
+          {error}{' '}
+          <button type="button" className="c-linkish" onClick={() => void load()}>
+            Try again
+          </button>
+        </p>
+      )}
+      {loading && !error && <p role="status">Loading bookings…</p>}
       {view === 'List' ? (
         <Table
           rows={rows}
-          id={(b) => b.id}
-          onOpen={(b) => navigate(`/console/bookings/${b.id}`)}
+          id={(b) => b.bookingId}
+          onOpen={(b) => navigate(`/console/bookings/${b.bookingId}`)}
           columns={[
             {
               key: 'ref',
@@ -163,14 +283,14 @@ export default function Bookings() {
             {
               key: 'rooms',
               label: 'Rooms',
-              render: (b) => b.lines.map((l) => `${l.quantity} × ${roomName(l.room)}`).join(', '),
+              render: (b) => b.lines.map((l) => `${l.quantity} × ${l.roomName}`).join(', '),
             },
             {
               key: 'total',
               label: 'Purchased total',
               numeric: true,
-              value: bookingValue,
-              render: (b) => money(bookingValue(b)),
+              value: (b) => b.total,
+              render: (b) => money(b.total),
             },
             { key: 'status', label: 'Booking', render: (b) => <Badge>{b.status}</Badge> },
             { key: 'payment', label: 'Payment', render: (b) => <Badge>{b.payment}</Badge> },
@@ -220,7 +340,7 @@ export default function Bookings() {
                     <button
                       key={b.id}
                       className={`c-calendar-booking ${b.status === 'Confirmed' ? '' : 'unconfirmed'}`}
-                      onClick={() => navigate(`/console/bookings/${b.id}`)}
+                      onClick={() => navigate(`/console/bookings/${b.bookingId}`)}
                     >
                       <strong>{b.guest}</strong>
                       <small>
@@ -234,10 +354,16 @@ export default function Bookings() {
           </div>
         </section>
       )}
-      {path.split('/')[3] &&
+      {openReference &&
         (selected ? (
-          <BookingDetail booking={selected} onClose={() => navigate('/console/bookings')} />
-        ) : (
+          <BookingDetail
+            bookingId={selected.bookingId}
+            summary={selected}
+            actorRole={actor.role}
+            actorId={principal?.userId ?? ''}
+            onClose={() => navigate('/console/bookings')}
+          />
+        ) : loading ? null : (
           <Drawer title="Booking unavailable" onClose={() => navigate('/console/bookings')}>
             <Empty text="This reference was not found." />
           </Drawer>
@@ -245,15 +371,13 @@ export default function Bookings() {
       {exporting && (
         <ExportDialog
           onClose={() => setExporting(false)}
-          onExport={(from, to) => {
-            if (!exec({ type: 'export', from, to })) return;
-            const blob = new Blob(['\uFEFF', bookingCSV(state, from, to)], { type: 'text/csv;charset=utf-8;' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `quiet-estate-${from}-${to}.csv`;
-            a.click();
-            window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+          onExport={async (exportFrom, exportTo) => {
+            // The server builds the file (INV-51 escaping, one row per booked room, the audited
+            // range). The browser only saves what it is handed.
+            await downloadAdminFile(
+              `/exports/bookings.csv?from=${exportFrom}&to=${exportTo}`,
+              `quiet-estate-${exportFrom}-${exportTo}.csv`,
+            );
             setExporting(false);
           }}
         />
@@ -261,10 +385,87 @@ export default function Bookings() {
     </>
   );
 }
-function BookingDetail({ booking: b, onClose }: { booking: Booking; onClose: () => void }) {
-  const { state } = useConsole();
-  const thread = state.threads.find((t) => t.booking === b.id);
-  const { actor } = useConsole();
+type BookingDetailApi = {
+  bookingId: string;
+  reference: string;
+  roomPaise: number;
+  discountPaise: number;
+  taxPaise: number;
+  totalPaise: number;
+  holdExpiresAt: string | null;
+  confirmedAt: string | null;
+  createdAt: string;
+  rooms: Array<{
+    bookingRoomId: string;
+    roomTypeId: string;
+    roomName: string;
+    adults: number;
+    children: number;
+    nights: Array<{ stayDate: string; pricePaise: number }>;
+  }>;
+  payments: Array<{ id: string; status: string; amountPaise: number; createdAt: string }>;
+  refunds: Array<{ id: string; status: string; amountPaise: number }>;
+};
+
+function BookingDetail({
+  bookingId,
+  summary,
+  actorRole,
+  actorId,
+  onClose,
+}: {
+  bookingId: string;
+  summary: BookingRow;
+  actorRole: string;
+  actorId: string;
+  onClose: () => void;
+}) {
+  const b = summary;
+  const [detail, setDetail] = useState<BookingDetailApi | null>(null);
+  // Captured once per open, so re-rendering the drawer cannot change what the hold countdown
+  // says mid-paint (react-hooks/purity). The fixture screen read a frozen demo clock here.
+  const [openedAt] = useState(() => Date.now());
+  const [thread, setThread] = useState<{ enquiryId: string; assigneeId: string | null } | null>(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let live = true;
+    adminFetch<BookingDetailApi>(`/bookings/${bookingId}`)
+      .then((body) => live && setDetail(body))
+      .catch((failure) => live && setError(failure instanceof AdminApiError ? failure.message : 'Could not load this booking.'));
+    // A thread raised against this booking, if there is one. Server-scoped (INV-38), so staff
+    // are shown only their own — the role check below is presentation, never the control.
+    adminFetch<{ items: Array<{ enquiryId: string; assigneeId: string | null }> }>(`/enquiries?bookingId=${bookingId}&limit=1`)
+      .then((body) => live && setThread(body.items[0] ?? null))
+      .catch(() => live && setThread(null));
+    return () => {
+      live = false;
+    };
+  }, [bookingId]);
+
+  // One entry per room TYPE, which is how the stay reads to a human: "2 × Garden Suite".
+  const lines = detail
+    ? Array.from(
+        detail.rooms
+          .reduce((grouped, room) => {
+            const at = grouped.get(room.roomTypeId);
+            if (at) at.quantity += 1;
+            else
+              grouped.set(room.roomTypeId, {
+                roomTypeId: room.roomTypeId,
+                roomName: room.roomName,
+                quantity: 1,
+                adults: room.adults,
+                children: room.children,
+                nightly: room.nights[0]?.pricePaise ?? 0,
+              });
+            return grouped;
+          }, new Map<string, { roomTypeId: string; roomName: string; quantity: number; adults: number; children: number; nightly: number }>())
+          .values(),
+      )
+    : [];
+  const stayNights = nightsBetween(b.arrival, b.departure);
+
   return (
     <Drawer title={b.id} subtitle="Purchased booking details · read-only" onClose={onClose}>
       <div className="c-stack">
@@ -272,6 +473,11 @@ function BookingDetail({ booking: b, onClose }: { booking: Booking; onClose: () 
           <Badge>{b.status}</Badge>
           <Badge>{b.payment}</Badge>
         </div>
+        {error && (
+          <p className="c-error" role="alert">
+            {error}
+          </p>
+        )}
         <section className="c-detail-section">
           <h3>Lead guest</h3>
           <strong>{b.guest}</strong>
@@ -283,49 +489,52 @@ function BookingDetail({ booking: b, onClose }: { booking: Booking; onClose: () 
           <p>
             {dateText(b.arrival)} → {dateText(b.departure)}
           </p>
-          <small>{nights(b)} nights · checkout exclusive</small>
-          {b.lines.map((l) => (
-            <div className="c-purchased-line" key={l.room}>
+          <small>{stayNights} nights · checkout exclusive</small>
+          {!detail && !error && <p role="status">Loading purchased details…</p>}
+          {lines.map((l) => (
+            <div className="c-purchased-line" key={l.roomTypeId}>
               <strong>
-                {l.quantity} × {state.rooms.find((r) => r.id === l.room)?.name}
+                {l.quantity} × {l.roomName}
               </strong>
               <p>
                 {l.adults} adults, {l.children} children per room
               </p>
               <span>
-                {money(l.nightly)} per night × {nights(b)} nights × {l.quantity}
+                {money(l.nightly)} per night × {stayNights} nights × {l.quantity}
               </span>
-              <b>{money(l.nightly * nights(b) * l.quantity)}</b>
+              <b>{money(l.nightly * stayNights * l.quantity)}</b>
             </div>
           ))}
         </section>
+        {detail && (
+          <section className="c-detail-section">
+            <h3>Purchased amounts</h3>
+            <dl className="c-money-list">
+              <dt>Room value</dt>
+              <dd>{money(detail.roomPaise)}</dd>
+              <dt>Discount</dt>
+              <dd>−{money(detail.discountPaise)}</dd>
+              <dt>Tax snapshot</dt>
+              <dd>{money(detail.taxPaise)}</dd>
+              <dt>Total (including tax)</dt>
+              <dd>
+                <strong>{money(detail.totalPaise)}</strong>
+              </dd>
+            </dl>
+            <p className="c-muted">Purchased amounts are preserved when current rates change.</p>
+          </section>
+        )}
         <section className="c-detail-section">
-          <h3>Purchased amounts</h3>
-          <dl className="c-money-list">
-            <dt>Room value</dt>
-            <dd>{money(bookingValue(b) + b.discount - b.tax)}</dd>
-            <dt>Discount</dt>
-            <dd>−{money(b.discount)}</dd>
-            <dt>Tax snapshot</dt>
-            <dd>{money(b.tax)}</dd>
-            <dt>Total (including tax)</dt>
-            <dd>
-              <strong>{money(bookingValue(b))}</strong>
-            </dd>
-          </dl>
-          <p className="c-muted">Purchased amounts are preserved when current rates change.</p>
-        </section>
-        <section className="c-detail-section">
-          <h3>Payment & delivery history</h3>
+          <h3>Payment &amp; delivery history</h3>
           <ol className="c-timeline">
             <li>Created · {dateText(b.confirmed)}</li>
             <li>Payment · {b.payment}</li>
             {b.status === 'Confirmed' && <li>Confirmation message recorded</li>}
             {b.holdUntil &&
-              (Date.parse(b.holdUntil) > Date.parse(now(state)) ? (
+              (Date.parse(b.holdUntil) > openedAt ? (
                 <li>
                   Hold valid until {timeTextSafe(b.holdUntil)} ·{' '}
-                  {Math.ceil((Date.parse(b.holdUntil) - Date.parse(now(state))) / 60000)} min remaining
+                  {Math.ceil((Date.parse(b.holdUntil) - openedAt) / 60000)} min remaining
                 </li>
               ) : (
                 <li>Hold lapsed at {timeTextSafe(b.holdUntil)} · the room is back in website availability</li>
@@ -339,8 +548,8 @@ function BookingDetail({ booking: b, onClose }: { booking: Booking; onClose: () 
             )}
           </ol>
         </section>
-        {thread && (actor.role !== 'staff' || thread.assignee === actor.id) && (
-          <Link className="c-button" href={`/console/enquiries/${thread.id}`}>
+        {thread && (actorRole !== 'staff' || thread.assigneeId === actorId) && (
+          <Link className="c-button" href={`/console/enquiries/${thread.enquiryId}`}>
             Open related enquiry
           </Link>
         )}
@@ -351,18 +560,39 @@ function BookingDetail({ booking: b, onClose }: { booking: Booking; onClose: () 
 function timeTextSafe(value: string) {
   return new Intl.DateTimeFormat('en-IN', { timeStyle: 'short', timeZone: 'Asia/Kolkata' }).format(new Date(value));
 }
-function ExportDialog({ onClose, onExport }: { onClose: () => void; onExport: (from: string, to: string) => void }) {
-  const { state } = useConsole();
+function ExportDialog({ onClose, onExport }: { onClose: () => void; onExport: (from: string, to: string) => Promise<void> }) {
   const [from, setFrom] = useState('2026-11-01');
   const [to, setTo] = useState('2026-11-30');
+  const [count, setCount] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
   const valid = datesBetween(from, to).length > 0;
+
+  // The same confirmation-date window the export itself uses, so the number shown here and the
+  // number of bookings in the downloaded file are the same number.
+  useEffect(() => {
+    if (!valid) return;
+    let live = true;
+    adminFetch<{ items: unknown[] }>(`/bookings?status=confirmed&confirmedFrom=${from}&confirmedTo=${to}&limit=100`)
+      .then((body) => live && setCount(body.items.length))
+      .catch(() => live && setCount(null));
+    return () => {
+      live = false;
+    };
+  }, [from, to, valid]);
+
   return (
     <Drawer title="Export bookings" subtitle="Confirmation date · Asia/Kolkata" onClose={onClose}>
       <form
         className="c-stack"
         onSubmit={(e) => {
           e.preventDefault();
-          if (valid) onExport(from, to);
+          if (!valid || busy) return;
+          setBusy(true);
+          setError('');
+          onExport(from, to)
+            .catch((failure) => setError(failure instanceof AdminApiError ? failure.message : 'The export did not complete.'))
+            .finally(() => setBusy(false));
         }}
       >
         <Field label="From date">
@@ -371,20 +601,18 @@ function ExportDialog({ onClose, onExport }: { onClose: () => void; onExport: (f
         <Field label="To date">
           <DateInput type="date" min={from} required value={to} onChange={(e) => setTo(e.target.value)} />
         </Field>
-        <div className="c-callout">
-          {valid
-            ? state.bookings.filter(
-                (b) => b.status === 'Confirmed' && b.confirmed.slice(0, 10) >= from && b.confirmed.slice(0, 10) <= to,
-              ).length
-            : 0}{' '}
-          confirmed bookings in range.
-        </div>
+        <div className="c-callout">{valid ? (count ?? 0) : 0} confirmed bookings in range.</div>
         <p>
           One row per booked room type. Booking-level tax, discount and total are labelled as repeated and must not be
           summed across room lines.
         </p>
-        <button className="c-primary" disabled={!valid}>
-          <Download size={15} /> Download CSV
+        {error && (
+          <p className="c-error" role="alert">
+            {error}
+          </p>
+        )}
+        <button className="c-primary" disabled={!valid || busy}>
+          <Download size={15} /> {busy ? 'Preparing…' : 'Download CSV'}
         </button>
       </form>
     </Drawer>

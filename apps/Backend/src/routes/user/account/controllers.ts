@@ -24,7 +24,9 @@ export async function updateProfileController(
 
   try {
     const principal = currentPrincipal(response);
-    await pool.query(`UPDATE users SET name = $1 WHERE id = $2`, [parsed.data.name, principal.userId]);
+    await pool.query(`UPDATE users SET name = $1,
+      onboarding_complete = onboarding_complete OR (email_verified_at IS NOT NULL AND phone_verified_at IS NOT NULL)
+      WHERE id = $2`, [parsed.data.name, principal.userId]);
     response.status(200).json({ name: parsed.data.name });
   } catch (error) {
     next(error);

@@ -10,13 +10,32 @@ export async function readResortInfoController(request: Request, response: Respo
   if (!parsed.success) return next(badRequest(parsed.error));
 
   try {
-    const { rows } = await pool.query<{ key: string; title: string; body: string; version: number; created_at: string }>(
-      `SELECT key, title, body, version, created_at FROM resort_info
-        WHERE is_current ${parsed.data.key ? 'AND key = $1' : ''}
-        ORDER BY key`,
+    // `history=true` drops the is_current filter: publishing never edits a row, so every
+    // superseded version is still on file and the editor can show what changed and when.
+    const conditions = [parsed.data.history ? 'TRUE' : 'is_current'];
+    if (parsed.data.key) conditions.push('r.key = $1');
+    const { rows } = await pool.query<{
+      key: string; title: string; body: string; version: number; is_current: boolean;
+      created_at: string; editor: string | null;
+    }>(
+      `SELECT r.key, r.title, r.body, r.version, r.is_current, r.created_at, u.name AS editor
+         FROM resort_info r
+         LEFT JOIN users u ON u.id = r.created_by
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY r.key, r.version DESC`,
       parsed.data.key ? [parsed.data.key] : [],
     );
-    response.status(200).json({ items: rows.map((r) => ({ key: r.key, title: r.title, body: r.body, version: r.version, createdAt: r.created_at })) });
+    response.status(200).json({
+      items: rows.map((r) => ({
+        key: r.key,
+        title: r.title,
+        body: r.body,
+        version: r.version,
+        isCurrent: r.is_current,
+        editor: r.editor,
+        createdAt: r.created_at,
+      })),
+    });
   } catch (error) {
     next(error);
   }

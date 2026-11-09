@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { pool } from '../../../db.ts';
 import { AppError, badRequest, notFound } from '../../../middleware/errors.ts';
+import { POLICY } from '../../../core/policy.ts';
 import { listBookingsQuerySchema } from './schema.ts';
 
 function encodeCursor(createdAt: string, id: string): string {
@@ -24,9 +25,14 @@ type BookingRow = {
   check_out: string;
   guest_name: string;
   guest_email: string;
+  guest_phone: string;
   total_paise: number;
+  hold_expires_at: string | null;
+  confirmed_at: string | null;
   created_at: string;
   cursor_value: string;
+  payment_status: string | null;
+  refund_status: string | null;
 };
 
 /** Sales sees every booking (§5) — no scope filter here, unlike `admin/enquiries` (INV-38 is
@@ -42,28 +48,69 @@ export async function readBookingsController(request: Request, response: Respons
   const conditions: string[] = ['TRUE'];
   if (query.status) {
     params.push(query.status);
-    conditions.push(`status = $${params.length}`);
+    conditions.push(`b.status = $${params.length}`);
   }
   if (query.search) {
     params.push(`%${query.search}%`);
-    conditions.push(`(reference ILIKE $${params.length} OR guest_email ILIKE $${params.length} OR guest_name ILIKE $${params.length})`);
+    conditions.push(`(b.reference ILIKE $${params.length} OR b.guest_email ILIKE $${params.length} OR b.guest_name ILIKE $${params.length})`);
+  }
+  // Confirmation-date window, in POLICY.timezone — identical to the CSV export's clause (§21),
+  // so a figure read on a report and a file exported for the same range cannot disagree.
+  if (query.confirmedFrom || query.confirmedTo) {
+    params.push(POLICY.timezone);
+    const tz = params.length;
+    conditions.push('b.confirmed_at IS NOT NULL');
+    if (query.confirmedFrom) {
+      params.push(query.confirmedFrom);
+      conditions.push(`(b.confirmed_at AT TIME ZONE $${tz})::date >= $${params.length}::date`);
+    }
+    if (query.confirmedTo) {
+      params.push(query.confirmedTo);
+      conditions.push(`(b.confirmed_at AT TIME ZONE $${tz})::date <= $${params.length}::date`);
+    }
   }
   if (cursor) {
     params.push(cursor.createdAt, cursor.id);
-    conditions.push(`(created_at, id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`);
+    conditions.push(`(b.created_at, b.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`);
   }
   params.push(query.limit);
 
   try {
     const { rows } = await pool.query<BookingRow>(
-      `SELECT id, reference, status, check_in, check_out, guest_name, guest_email, total_paise,
-              created_at, created_at::text AS cursor_value
-         FROM bookings
+      // `payment_status` is the LATEST attempt's status, by attempt_no — a booking may have
+      // several (a decline then a success), and the screen shows one badge. The lateral join
+      // keeps it to a single round trip rather than a query per row.
+      `SELECT b.id, b.reference, b.status, b.check_in, b.check_out, b.guest_name, b.guest_email,
+              b.guest_phone, b.total_paise, b.hold_expires_at, b.confirmed_at, b.created_at,
+              b.created_at::text AS cursor_value, p.status AS payment_status, r.status AS refund_status
+         FROM bookings b
+         LEFT JOIN LATERAL (
+           SELECT status FROM payments WHERE booking_id = b.id ORDER BY attempt_no DESC LIMIT 1
+         ) p ON TRUE
+         LEFT JOIN LATERAL (
+           SELECT status FROM refunds WHERE booking_id = b.id ORDER BY created_at DESC LIMIT 1
+         ) r ON TRUE
         WHERE ${conditions.join(' AND ')}
-        ORDER BY created_at DESC, id DESC
+        ORDER BY b.created_at DESC, b.id DESC
         LIMIT $${params.length}`,
       params,
     );
+    // One query for every row's booked rooms, grouped by type — the list shows "2 × Garden
+    // Suite", and a query per booking would be an N+1 over the page.
+    const { rows: roomRows } = await pool.query<{ booking_id: string; room_type_id: string; room_name_snapshot: string; quantity: number }>(
+      `SELECT booking_id, room_type_id, room_name_snapshot, count(*)::int AS quantity
+         FROM booking_rooms WHERE booking_id = ANY($1::uuid[])
+        GROUP BY booking_id, room_type_id, room_name_snapshot
+        ORDER BY room_name_snapshot`,
+      [rows.map((r) => r.id)],
+    );
+    const roomsByBooking = new Map<string, Array<{ roomTypeId: string; roomName: string; quantity: number }>>();
+    for (const room of roomRows) {
+      const list = roomsByBooking.get(room.booking_id) ?? [];
+      list.push({ roomTypeId: room.room_type_id, roomName: room.room_name_snapshot, quantity: room.quantity });
+      roomsByBooking.set(room.booking_id, list);
+    }
+
     const last = rows[rows.length - 1];
     const nextCursor = rows.length === query.limit && last ? encodeCursor(last.cursor_value, last.id) : null;
     response.status(200).json({
@@ -75,8 +122,14 @@ export async function readBookingsController(request: Request, response: Respons
         checkOut: r.check_out,
         guestName: r.guest_name,
         guestEmail: r.guest_email,
+        guestPhone: r.guest_phone,
         totalPaise: r.total_paise,
+        holdExpiresAt: r.hold_expires_at,
+        confirmedAt: r.confirmed_at,
         createdAt: r.created_at,
+        paymentStatus: r.payment_status,
+        refundStatus: r.refund_status,
+        rooms: roomsByBooking.get(r.id) ?? [],
       })),
       nextCursor,
     });
@@ -92,10 +145,10 @@ export async function readBookingController(request: Request, response: Response
       id: string; reference: string; status: string; check_in: string; check_out: string;
       guest_name: string; guest_email: string; guest_phone: string;
       room_paise: number; discount_paise: number; tax_paise: number; total_paise: number;
-      confirmed_at: string | null; created_at: string;
+      hold_expires_at: string | null; confirmed_at: string | null; created_at: string;
     }>(
       `SELECT id, reference, status, check_in, check_out, guest_name, guest_email, guest_phone,
-              room_paise, discount_paise, tax_paise, total_paise, confirmed_at, created_at
+              room_paise, discount_paise, tax_paise, total_paise, hold_expires_at, confirmed_at, created_at
          FROM bookings WHERE id = $1`,
       [bookingId],
     );
@@ -132,6 +185,7 @@ export async function readBookingController(request: Request, response: Response
       discountPaise: booking.discount_paise,
       taxPaise: booking.tax_paise,
       totalPaise: booking.total_paise,
+      holdExpiresAt: booking.hold_expires_at,
       confirmedAt: booking.confirmed_at,
       createdAt: booking.created_at,
       rooms: rooms.map((r) => ({

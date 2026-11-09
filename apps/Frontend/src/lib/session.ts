@@ -6,6 +6,10 @@ import type { Principal } from './types';
 // cookie the browser handles entirely on its own; this module never sees it.
 let accessToken: string | null = null;
 let principal: Principal | null = null;
+// True until the one-shot refresh-cookie bootstrap has answered. Between first paint and that
+// answer the app does not yet know whether anyone is signed in, and rendering the signed-out
+// branch in the meantime is rendering the wrong thing, not an unknown one.
+let restoring = true;
 const listeners = new Set<() => void>();
 
 function notify() {
@@ -26,6 +30,18 @@ export function setSession(next: { accessToken: string; principal: Principal }):
   notify();
 }
 
+export function isRestoring(): boolean {
+  return restoring;
+}
+
+/** Ends the restoring window, whatever the bootstrap concluded. Always called — a failed
+ *  refresh is an answer ("nobody is signed in"), not a reason to wait for ever. */
+export function finishRestoring(): void {
+  if (!restoring) return;
+  restoring = false;
+  notify();
+}
+
 export function clearSession(): void {
   accessToken = null;
   principal = null;
@@ -42,6 +58,13 @@ export function subscribeSession(callback: () => void): () => void {
  *  guest signed in at /checkout instead (and vice versa). */
 export function usePrincipal(): Principal | null {
   return useSyncExternalStore(subscribeSession, getPrincipal, getPrincipal);
+}
+
+/** True while the refresh-cookie bootstrap is still in flight. A screen whose two branches are
+ *  "signed in" and "signed out" needs this to avoid showing the second one to someone who turns
+ *  out to be the first. */
+export function useSessionRestoring(): boolean {
+  return useSyncExternalStore(subscribeSession, isRestoring, isRestoring);
 }
 
 /** Ends the session on the SERVER as well as here. `POST /auth/logout` reads the httpOnly

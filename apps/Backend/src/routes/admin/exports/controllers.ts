@@ -41,10 +41,16 @@ export async function exportBookingsCsvController(request: Request, response: Re
   const actor = response.locals.principal as Principal;
 
   try {
+    // `confirmed_at` is formatted in SQL, not by JavaScript. node-postgres hands back a Date
+    // for timestamptz, and interpolating that into a CSV yields a locale string —
+    // "Mon Nov 09 2026 01:09:10 GMT+0530 (India Standard Time)" — not a timestamp the
+    // reservation system can import (§21). ISO-8601 UTC is unambiguous, sortable and
+    // comma-free, so it cannot break the row either.
     const { rows } = await pool.query<ExportRow>(
       `SELECT b.reference, b.status, b.check_in, b.check_out, b.guest_name, b.guest_email, b.guest_phone,
               br.room_name_snapshot, br.adults, br.children,
-              b.room_paise, b.discount_paise, b.tax_paise, b.total_paise, b.confirmed_at
+              b.room_paise, b.discount_paise, b.tax_paise, b.total_paise,
+              to_char(b.confirmed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS confirmed_at
          FROM bookings b
          JOIN booking_rooms br ON br.booking_id = b.id
         WHERE b.confirmed_at IS NOT NULL

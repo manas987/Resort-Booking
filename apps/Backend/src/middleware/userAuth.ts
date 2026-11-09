@@ -51,6 +51,10 @@ export async function requireVerifiedGuest(
     next(forbidden('Verify your email and phone before booking.'));
     return;
   }
+  if (principal.onboardingComplete === false) {
+    next(forbidden('Confirm your name to complete your account before booking.'));
+    return;
+  }
   response.locals.principal = principal;
   next();
 }

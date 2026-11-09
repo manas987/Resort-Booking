@@ -1,6 +1,6 @@
 import { LoadingSkeleton } from '../components/LoadingSkeleton';
 import { Select } from '../components/FormControls';
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import {
   Activity,
@@ -22,18 +22,9 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { ConsoleContext } from './store';
-import {
-  DEMO_NOW,
-  initialEmployees,
-  manager,
-  pageAllowed,
-  seedState,
-  transition,
-  visibleThreads,
-  type Command,
-} from './model';
+import { dateText, pageAllowedFor, timeText } from './model';
 import { Badge, Drawer, Empty, Field } from './ui';
-import { AdminApiError, staffLogin, staffLogout, restoreStaffSession, type StaffPrincipal } from './api';
+import { adminFetch, AdminApiError, staffLogin, staffLogout, restoreStaffSession, type StaffPrincipal } from './api';
 import { reviewerToolsEnabled } from '../lib/reviewerTools';
 import './console.css';
 const Overview = lazy(() => import('./Overview'));
@@ -114,16 +105,6 @@ function RealInboundInjector() {
 /** The seed's employee password (apps/Backend/seeds/run.ts). Fixture data for a synthetic
  *  database, documented in deployment.md — not a credential for anything real. */
 const SEED_PASSWORD = 'ReviewerDemo!2026';
-
-/** Bridges the real principal to the local fixture actor the unwired screens still read.
- *  Matched on role/team rather than username, because the seeded usernames and the fixture
- *  usernames are different sets and always were. Purely transitional — it disappears with
- *  model.ts. */
-function localActorFor(principal: StaffPrincipal): string {
-  if (principal.role === 'owner') return 'owner';
-  if (principal.role === 'gm') return 'gm';
-  return principal.team === 'sales' ? 'sales' : 'res';
-}
 
 const navigation: { group: string; entries: [string, string, LucideIcon][] }[] = [
   {
@@ -277,17 +258,34 @@ function Login({ onLogin }: { onLogin: (principal: StaffPrincipal) => void }) {
   );
 }
 
+/** The five types `notifications.type` may hold (001_init.sql's CHECK constraint). Taken from
+ *  the migration rather than guessed — an invented name silently falls through to a generic
+ *  label and the alert stops saying what it is. */
+const NOTIFICATION_LABEL: Record<string, string> = {
+  complaint_alert: 'Complaint needs attention',
+  unassigned_enquiry: 'Enquiry needs assignment',
+  ai_failure: 'AI processing failed',
+  assignment: 'Enquiry assigned to you',
+  refund_recorded: 'Refund recorded',
+};
+
+type Notification = {
+  id: string;
+  type: string;
+  enquiryId: string | null;
+  bookingId: string | null;
+  body: string;
+  readAt: string | null;
+  createdAt: string;
+};
+
 export default function Console() {
   const [path, navigate] = useLocation();
-  const [state, setState] = useState(seedState);
-  // The real, server-issued staff identity. `identity` below is still the LOCAL fixture
-  // employee id, because every screen except Rates/Enquiries still reads its data from
-  // model.ts; the two are matched by username so a signed-in GM sees GM-scoped fixtures.
-  // When the remaining screens are wired, `identity` and the fixture lookup both go away and
-  // `staff` is the only actor. See Docs/08-known-issues.md.
+  // The server-issued staff identity is now the ONLY actor. There used to be a second, local
+  // one — a fixture employee matched by role — because the unwired screens read model.ts. The
+  // sidebar and the greeting therefore named the wrong person. Both are gone.
   const [staff, setStaff] = useState<StaffPrincipal | null>(null);
   const [restoring, setRestoring] = useState(true);
-  const [identity, setIdentity] = useState('');
   const [collapsed, setCollapsed] = useState(false);
   const [mobile, setMobile] = useState(false);
   const [panel, setPanel] = useState('');
@@ -295,7 +293,7 @@ export default function Console() {
   const [error, setError] = useState('');
   const [scenario, setScenario] = useState('Normal');
   const [offline, setOffline] = useState(!navigator.onLine);
-  const actor = state.employees.find((e) => e.id === identity) || initialEmployees[0];
+  const [notifications, setNotifications] = useState<Notification[]>([]);
   const page = path.split('/')[2] || 'overview';
   useEffect(() => {
     const update = () => setOffline(!navigator.onLine);
@@ -312,7 +310,6 @@ export default function Console() {
       .then((principal) => {
         if (cancelled || !principal) return;
         setStaff(principal);
-        setIdentity(localActorFor(principal));
       })
       .finally(() => {
         if (!cancelled) setRestoring(false);
@@ -325,33 +322,25 @@ export default function Console() {
     document.title = `Employee console — The Quiet Estate`;
     document.querySelector('.c-workspace')?.scrollTo(0, 0);
   }, [path]);
-  function exec(command: Command) {
-    setError('');
-    if (offline || scenario === 'Offline') {
-      setToast('Offline: this action was not submitted. Your current work is preserved.');
-      setError('Offline: this action was not submitted. Your current work is preserved.');
-      return false;
-    }
+  // Real notifications: `complaint` alerts go to every active GM and owner the moment the AI
+  // classifies one, and `ai_failure` when the provider could not be reached (§2, INV-18).
+  const loadNotifications = useCallback(async () => {
     try {
-      const id = crypto.randomUUID();
-      const time = new Date(Date.parse(DEMO_NOW) + state.revision * 60000).toISOString();
-      setState(transition(state, identity, command, time, id));
-      setToast(command.type === 'reply' ? 'Message recorded' : 'Changes saved');
-      return true;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Unable to complete this action.');
-      setToast(e instanceof Error ? e.message : 'Unable to complete this action.');
-      return false;
+      const body = await adminFetch<{ items: Notification[] }>('/notifications');
+      setNotifications(body.items);
+    } catch {
+      // A failed badge refresh must never break the workspace.
     }
-  }
-  const alerts = visibleThreads(state, actor).filter(
-    (t) =>
-      t.unread ||
-      (t.status !== 'Resolved' &&
-        manager(actor) &&
-        (t.category === 'Complaint' || !t.assignee || t.ai === 'Failed' || t.ai === 'Needs review')),
-  );
-  const unread = alerts.filter((t) => !state.readAlerts.includes(t.id));
+  }, []);
+
+  useEffect(() => {
+    if (!staff) return;
+    // Deferred a tick so the first setState is not synchronous inside the effect body
+    // (react-hooks/set-state-in-effect) — the pattern every wired screen here uses.
+    void Promise.resolve().then(loadNotifications);
+  }, [staff, loadNotifications, path]);
+
+  const unread = notifications.filter((n) => !n.readAt);
   function go(to: string) {
     setError('');
     navigate(to);
@@ -370,14 +359,13 @@ export default function Console() {
         <Login
           onLogin={(principal) => {
             setStaff(principal);
-            setIdentity(localActorFor(principal));
             setScenario('Normal');
             navigate('/console/overview');
           }}
         />
       </div>
     );
-  const allowed = pageAllowed(actor, page);
+  const allowed = pageAllowedFor(staff.role, page);
   const pages: Record<string, React.ReactNode> = {
     overview: <Overview />,
     enquiries: <Enquiries />,
@@ -389,7 +377,7 @@ export default function Console() {
     activity: <Audit />,
   };
   return (
-    <ConsoleContext.Provider value={{ state, actor, exec, notify: setToast, navigate: go, error }}>
+    <ConsoleContext.Provider value={{ notify: setToast, navigate: go, error }}>
       <div className={`console c-shell ${collapsed ? 'c-collapsed' : ''} ${mobile ? 'c-mobile-open' : ''}`}>
         {mobile && <button className="c-nav-shade" aria-label="Close navigation" onClick={() => setMobile(false)} />}
         <aside className="c-sidebar">
@@ -415,7 +403,7 @@ export default function Console() {
           </div>
           <div className="c-nav-groups">
             {navigation.map((group) => {
-              const entries = group.entries.filter(([id]) => pageAllowed(actor, id));
+              const entries = group.entries.filter(([id]) => pageAllowedFor(staff.role, id));
               return entries.length ? (
                 <section key={group.group}>
                   <h2>{group.group}</h2>
@@ -446,14 +434,14 @@ export default function Console() {
             </Link>
             <button className="c-user" onClick={() => setPanel('Profile')}>
               <span className="c-avatar">
-                {actor.name
+                {staff.name
                   .split(' ')
                   .map((n) => n[0])
                   .join('')}
               </span>
               <span>
-                <strong>{actor.name}</strong>
-                <small>{actor.role === 'staff' ? actor.team : actor.role.toUpperCase()}</small>
+                <strong>{staff.name}</strong>
+                <small>{staff.role === 'staff' ? staff.team : staff.role.toUpperCase()}</small>
               </span>
               <ChevronDown size={14} />
             </button>
@@ -471,7 +459,7 @@ export default function Console() {
               </span>
             </div>
             <div>
-              {reviewerToolsEnabled && manager(actor) && (
+              {reviewerToolsEnabled && staff.role !== 'staff' && (
                 <button
                   className="c-icon"
                   title="Workspace tools"
@@ -490,7 +478,7 @@ export default function Console() {
                 {unread.length > 0 && <i />}
               </button>
               <button className="c-avatar" aria-label="Open profile" onClick={() => setPanel('Profile')}>
-                {actor.name[0]}
+                {staff.name[0]}
               </button>
             </div>
           </header>
@@ -551,16 +539,15 @@ export default function Console() {
           <Drawer title={panel} onClose={() => setPanel('')}>
             {panel === 'Profile' ? (
               <div className="c-stack">
-                <span className="c-avatar c-avatar-large">{actor.name[0]}</span>
-                <h3>{actor.name}</h3>
-                <p>{actor.email}</p>
-                <Badge>{actor.role === 'staff' ? actor.team : actor.role.toUpperCase()}</Badge>
+                <span className="c-avatar c-avatar-large">{staff.name[0]}</span>
+                <h3>{staff.name}</h3>
+                <p>{staff.username}</p>
+                <Badge>{staff.role === 'staff' ? staff.team : staff.role.toUpperCase()}</Badge>
                 <button
                   className="c-button"
                   onClick={() => {
                     void staffLogout();
                     setStaff(null);
-                    setIdentity('');
                     setPanel('');
                     navigate('/console/login');
                   }}
@@ -570,31 +557,22 @@ export default function Console() {
               </div>
             ) : panel === 'Notifications' ? (
               <div className="c-stack">
-                {alerts.length ? (
-                  alerts.map((t) => (
+                {notifications.length ? (
+                  notifications.map((n) => (
                     <button
-                      className={`c-alert-item ${state.readAlerts.includes(t.id) ? '' : 'unread'}`}
-                      key={t.id}
+                      className={`c-alert-item ${n.readAt ? '' : 'unread'}`}
+                      key={n.id}
                       onClick={() => {
-                        exec({ type: 'read', id: t.id });
-                        go(`/console/enquiries/${t.id}`);
+                        void adminFetch(`/notifications/${n.id}/read`, { method: 'POST' }).then(loadNotifications, () => {});
+                        if (n.enquiryId) go(`/console/enquiries/${n.enquiryId}`);
+                        else if (n.bookingId) go(`/console/bookings/${n.bookingId}`);
                       }}
                     >
-                      <strong>
-                        {t.category === 'Complaint'
-                          ? 'Complaint needs attention'
-                          : !t.assignee
-                            ? 'Enquiry needs assignment'
-                            : t.ai === 'Failed'
-                              ? 'AI processing failed'
-                              : t.ai === 'Needs review'
-                                ? 'Classification needs review'
-                                : 'New enquiry activity'}
-                      </strong>
-                      <span>
-                        {t.name} · {t.id}
-                      </span>
-                      <small>{t.subject}</small>
+                      <strong>{NOTIFICATION_LABEL[n.type] ?? 'New activity'}</strong>
+                      <span>{n.body}</span>
+                      <small>
+                        {dateText(n.createdAt)} · {timeText(n.createdAt)}
+                      </small>
                     </button>
                   ))
                 ) : (
@@ -611,8 +589,7 @@ export default function Console() {
                       setScenario(e.target.value);
                       if (e.target.value === 'Expired session') {
                         void staffLogout();
-                    setStaff(null);
-                    setIdentity('');
+                        setStaff(null);
                         navigate('/console/login');
                         setPanel('');
                       }
@@ -625,19 +602,6 @@ export default function Console() {
                     <option>Expired session</option>
                   </Select>
                 </Field>
-                <h3>Incoming enquiry</h3>
-                {['Website', 'Email', 'WhatsApp', 'Complaint', 'Low confidence', 'AI failure'].map((scenario) => (
-                  <button
-                    className="c-button"
-                    key={scenario}
-                    onClick={() => {
-                      if (exec({ type: 'incoming', scenario, id: `ENQ-${Math.floor(10000 + state.revision)}` }))
-                        setPanel('');
-                    }}
-                  >
-                    Add {scenario.toLowerCase()} <ArrowUpRight size={14} />
-                  </button>
-                ))}
                 <RealInboundInjector />
               </div>
             )}

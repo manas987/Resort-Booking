@@ -14,8 +14,8 @@ import { ExploreEstate } from './components/ExploreEstate';
 import { ResortInfo } from './components/ResortInfo';
 import { scrollToBooking } from './lib/scrollToBooking';
 import { photoUrl, photoSrcSet } from './lib/photoUrl';
-import { apiFetch } from './lib/api';
-import { setSession, usePrincipal, signOut } from './lib/session';
+import { apiFetch, restoreGuestSession } from './lib/api';
+import { setSession, usePrincipal, signOut, finishRestoring } from './lib/session';
 import { SearchCapsule, type SearchCapsuleHandle } from './components/retro-pill/components/SearchCapsule';
 import './components/retro-pill/styles.css';
 
@@ -27,17 +27,18 @@ const HERO_PHOTO_ID = 'photo-1449158743715-0a90ebb6d2d8';
 /** `GET /auth/google/callback` redirects here with `#accessToken=<jwt>` (redirect-only — see
  * Docs/14-frontend-api-map.md). The fragment never reaches the server, so this is the one
  * place it is read. */
-function AuthCallback({ onSignedIn }: { onSignedIn: () => void }) {
+function AuthCallback({ onSignedIn }: { onSignedIn: (needsOnboarding?: boolean) => void }) {
   useEffect(() => {
     const token = new URLSearchParams(window.location.hash.slice(1)).get('accessToken');
     if (token) {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
       // The principal isn't in the fragment; GET /auth/me fills it in right after.
       import('./lib/api').then(({ apiFetch }) =>
-        apiFetch<{ principal: Parameters<typeof setSession>[0]['principal'] }>('/auth/me')
-          .then(({ principal }) => setSession({ accessToken: token, principal }))
-          .finally(onSignedIn),
+        apiFetch<{ principal: Parameters<typeof setSession>[0]['principal']; needsOnboarding?: boolean }>('/auth/me')
+          .then(({ principal, needsOnboarding }) => { setSession({ accessToken: token, principal }); finishRestoring(); onSignedIn(needsOnboarding); })
+          .catch(() => { finishRestoring(); onSignedIn(true); }),
       );
-    } else onSignedIn();
+    } else { finishRestoring(); onSignedIn(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once, reads the fragment at mount
   }, []);
   return <LoadingSkeleton label="Signing you in…" variant="text" />;
@@ -128,6 +129,15 @@ function GuestApp() {
     : null;
   const calendar = useRef<SearchCapsuleHandle>(null);
   const stopBookingScroll = useRef<(() => void) | undefined>(undefined);
+  // The access token lives in memory, so a reload leaves only the httpOnly refresh cookie.
+  // Trade it for a session once, here, exactly as the console does on mount — otherwise the
+  // only thing that ever restored a guest was a 401, and /checkout never provokes one, so a
+  // signed-in guest was shown "Sign in to book" for ever. Skipped on /auth/callback, where the
+  // credential in the URL fragment is the newer one.
+  useEffect(() => {
+    if (window.location.pathname === '/auth/callback') return;
+    void restoreGuestSession().finally(finishRestoring);
+  }, []);
   useEffect(() => () => stopBookingScroll.current?.(), [location]);
   useEffect(() => {
     document.title = isCheckout ? 'Review your stay — The Quiet Estate' : isBookingConfirmation ? 'Your booking — The Quiet Estate' : isRoomSelection ? 'Choose your room — The Quiet Estate' : isRoomList ? 'Rooms & villas — The Quiet Estate' : isSignIn ? 'Sign in — The Quiet Estate' : 'The Quiet Estate — Chikkamagaluru';
@@ -206,7 +216,7 @@ function GuestApp() {
 
   return (
     <main>
-      {isAuthCallback ? <AuthCallback onSignedIn={finishSignIn} />
+      {isAuthCallback ? <AuthCallback onSignedIn={(needsOnboarding) => needsOnboarding ? navigate('/signin') : finishSignIn()} />
         : accountTab ? <Suspense fallback={<LoadingSkeleton label="Loading your account…" variant="detail" />}><Account tab={accountTab} /></Suspense>
         : isEvents ? <Suspense fallback={<LoadingSkeleton label="Loading…" variant="detail" />}><Events /></Suspense>
         : isRoomSelection ? <RoomSelection arrival={arrival} departure={departure} cart={cart} onCart={setCart} />

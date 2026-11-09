@@ -44,6 +44,22 @@ function readCookie(request: Request, name: string): string | null {
   return null;
 }
 
+/** The employee's display name and username, for the console's own chrome.
+ *
+ *  Deliberately NOT part of `Principal` and never inside the JWT: a token carries identity and
+ *  authority, and a display name is neither — adding it would widen every token and force a
+ *  re-issue whenever someone's name changed. It rides alongside the session response instead.
+ *
+ *  Without this the console had no way to name the person signed in, and showed a FIXTURE
+ *  employee's name in the sidebar and the greeting — the wrong human, confidently. */
+async function employeeIdentity(userId: string): Promise<{ name: string; username: string | null }> {
+  const { rows } = await pool.query<{ name: string; username: string | null }>(
+    `SELECT name, username FROM users WHERE id = $1`,
+    [userId],
+  );
+  return rows[0] ?? { name: 'Employee', username: null };
+}
+
 async function respondWithSession(response: Response, userId: string, request: Request): Promise<void> {
   const principal = await loadPrincipal(userId);
   if (!principal) throw new AppError('internal_error', 'Account could not be loaded.');
@@ -54,7 +70,7 @@ async function respondWithSession(response: Response, userId: string, request: R
     ipHash: ipHash(request),
   });
   setRefreshCookie(response, refresh.token, refresh.expiresAt);
-  response.status(200).json({ accessToken, principal });
+  response.status(200).json({ accessToken, principal: { ...principal, ...(await employeeIdentity(userId)) } });
 }
 
 /** Username/password login. Never reveals which half failed, and never distinguishes
@@ -179,7 +195,10 @@ export async function refreshEmployeeSessionController(
   }
   setRefreshCookie(response, rotated.token, rotated.expiresAt);
   const accessToken = await mintAccessToken(rotated.principal);
-  response.status(200).json({ accessToken, principal: rotated.principal });
+  response.status(200).json({
+    accessToken,
+    principal: { ...rotated.principal, ...(await employeeIdentity(rotated.principal.userId)) },
+  });
 }
 
 export async function logoutEmployeeController(

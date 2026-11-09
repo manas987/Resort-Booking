@@ -6,7 +6,7 @@ import { Checkout } from '../src/components/Checkout';
 import { AvailabilityCalendar } from '../src/components/AvailabilityCalendar';
 import { ImageAccordion } from '../src/components/bencho/ImageAccordion';
 import { addLine, restoreCart } from '../src/data/cart';
-import { clearSession, setSession } from '../src/lib/session';
+import { clearSession, setSession, finishRestoring } from '../src/lib/session';
 
 const room = { roomTypeId: 'r1', slug: 'garden-suite', name: 'Garden Suite', pricePaise: 720000 };
 const cart = addLine(addLine([], room), room);
@@ -36,8 +36,33 @@ function renderCheckout() {
   return renderToStaticMarkup(<Router ssrPath="/checkout"><Checkout arrival="2026-11-12" departure="2026-11-19" cart={cart} onCart={() => {}} onSignIn={() => {}} /></Router>);
 }
 
+const VERIFIED_GUEST = { userId: 'u1', kind: 'guest', role: 'guest', team: null, emailVerified: true, phoneVerified: true } as const;
+
+/** The session store starts in its restoring window — the refresh-cookie bootstrap has not
+ *  answered yet. Every test below is about what checkout shows ONCE it has, so they settle it
+ *  first. The window itself has its own test. */
+test('checkout does not claim a guest is signed out before the session bootstrap answers', () => {
+  clearSession();
+  const restoringHtml = renderCheckout();
+  // The branch that would send an already-signed-in guest back to /signin must not be live yet:
+  // that is the bug this guards. The button stays in the markup (no UI change) but is inert.
+  expect(restoringHtml).toContain('Checking your sign-in…');
+  expect(restoringHtml).not.toContain('Make it your stay.');
+  expect(restoringHtml).toContain('disabled');
+
+  // The bootstrap answering is what commits the page to one branch or the other.
+  finishRestoring();
+  expect(renderCheckout()).toContain('Make it your stay.');
+
+  setSession({ accessToken: 'test-only', principal: VERIFIED_GUEST });
+  try {
+    expect(renderCheckout()).toContain('id="co-guest-email"');
+  } finally { clearSession(); }
+});
+
 test('checkout groups matching rooms, exposes quantity controls and sends signed-out guests to sign-in', () => {
   clearSession();
+  finishRestoring();
   const html = renderCheckout();
   expect(html.match(/class="checkout-item"/g)).toHaveLength(1);
   expect(html).toContain('2 rooms');
@@ -51,7 +76,8 @@ test('checkout groups matching rooms, exposes quantity controls and sends signed
 });
 
 test('verified guests see one guest form and a form-validated payment action', () => {
-  setSession({ accessToken: 'test-only', principal: { userId: 'u1', kind: 'guest', role: 'guest', team: null, emailVerified: true, phoneVerified: true } });
+  setSession({ accessToken: 'test-only', principal: VERIFIED_GUEST });
+  finishRestoring();
   try {
     const html = renderCheckout();
     expect(html.match(/id="co-guest-email"/g)).toHaveLength(1);
@@ -65,9 +91,37 @@ test('quantity changes cannot pay an old quote and related photos have a bounded
   expect(checkout).toContain('quoteKey === quoteSignature(promoApplied)');
   expect(checkout).toContain('if (request !== quoteRequest.current) return;');
   expect(checkout).toContain('!quoteLoading && verified');
+  // The bootstrap itself: without it, only a 401 ever restored a guest, and /checkout provokes
+  // none — which is exactly how a signed-in guest came to be shown "Sign in to book" for ever.
+  expect(source('../src/App.tsx')).toContain('void restoreGuestSession().finally(finishRestoring)');
+  expect(source('../src/lib/api.ts')).toContain('export async function restoreGuestSession()');
+  // A Google guest has a verified email and no phone at all, and booking needs both. Sending
+  // them through the email round again would verify what is already verified and leave them
+  // exactly where they started, so the form collects only the contact that is missing.
+  const signin = source('../src/components/CheckoutSignIn.tsx');
+  expect(signin).toContain("!principal.phoneVerified && (identity.needsOnboarding || verificationOnly)");
+  expect(signin).toContain("setStep('phone')");
   expect(checkout).toContain('setQuote(null)');
   expect(checkout).toContain('photo.variants.map');
   expect(source('../src/index.css')).toContain('.room-more-grid img{width:100%;height:auto;aspect-ratio:3/2;');
+});
+
+test('Google guests without a phone can reach Checkout without signing in again', () => {
+  finishRestoring();
+  setSession({ accessToken: 'test-only', principal: { ...VERIFIED_GUEST, phoneVerified: false } });
+  try {
+    const html = renderCheckout();
+    expect(html).toContain('id="co-guest-email"');
+    expect(html).toContain('Checkout');
+    expect(html).not.toContain('Sign in to book');
+  } finally { clearSession(); }
+});
+
+test('nullable audit targets use their kind without slicing null', () => {
+  const audit = source('../src/console/Audit.tsx');
+  expect(audit).toContain('targetId: string | null');
+  expect(audit).toContain("row.targetId ?");
+  expect(audit).toContain(': row.targetKind');
 });
 
 test('room availability is read-only and does not turn a loading state into sold-out dates', () => {

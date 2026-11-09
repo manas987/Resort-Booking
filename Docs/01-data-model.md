@@ -1,5 +1,9 @@
 # Data model
 
+Migration 002 adds users.onboarding_complete (boolean, NOT NULL, default true for existing
+accounts). Email-first and Google-created guests explicitly start false. Confirming their
+name after email and phone verification sets it true. No existing account or booking is reset.
+
 DDL: `apps/Backend/migrations/001_init.sql` **after sub-phase 1A**; until 1A runs it is still
 at `apps/Backend/db/migrations/001_init.sql`. Conventions: `00-conventions.md`.
 This file is the *why* — read it before writing SQL or adding a column.

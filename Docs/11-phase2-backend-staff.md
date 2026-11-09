@@ -1,5 +1,9 @@
 # Phase 2 — Backend, staff / GM / owner surface
 
+Activity contract correction (9 Nov): audit targetId and actorRole may be null; id is a
+number. CSV exports deliberately have targetKind=export without a target row. The console
+renders the kind alone and uses System for a missing role, rather than slicing null.
+
 Eight sub-phases. **Do one at a time, in order.** Phase 1 must be green first. Do not start a
 sub-phase before its tests in `tests-phase2.md` are written.
 
@@ -62,7 +66,7 @@ password. Delete an employee row.
 
 | Method | Path | Guard |
 |---|---|---|
-| GET | `/enquiries` | employee — filters: status, category, source, assignee, complaint, needs-review, unassigned, search. Sorts from an allowlist. Paginated **summary rows only** |
+| GET | `/enquiries` | employee — filters: status, category, source, assignee, **bookingId**, complaint, needs-review, unassigned, search. Sorts from an allowlist. Paginated **summary rows only**. Scoping (INV-38) applies on top of every filter |
 | GET | `/enquiries/counts` | employee — per-status lane counts plus unsorted/unassigned/complaint/unread facets. The Kanban header source and the cheap poll target |
 | GET | `/enquiries/:enquiryId` | `assignedOrAbove` — guest messages, internal notes, extraction, assignment history, delivery states, pending draft. Paginated history |
 | POST | `/enquiries/:enquiryId/read` | `assignedOrAbove` |
@@ -114,8 +118,13 @@ delivery as a reply (INV-26). Give a rerouting staff member read access to other
 
 | Method | Path | Guard |
 |---|---|---|
-| POST | `/enquiryDrafts/:enquiryId` | `assignedOrAbove` — generate or regenerate; supersedes the pending draft |
-| POST | `/enquiryDrafts/:enquiryId/retry` | `assignedOrAbove` — bounded retry of a failed stage |
+| POST | `/enquiryDrafts/:enquiryId` | `assignedOrAbove` — generate or regenerate; supersedes the pending draft. Rate-limited |
+| POST | `/enquiryDrafts/:enquiryId/retry` | `assignedOrAbove` — bounded retry of a failed stage. Rate-limited, same bucket as above |
+
+Both routes spend a real provider call and both are a button in the console, so they share one
+limiter keyed on the employee rather than the IP (`POLICY.ai.draftWindowSeconds`,
+`POLICY.ai.maxDraftsPerEmployee`; DR-1..DR-3). One bucket for the pair: a limiter per route would
+let `/retry` double the allowance. An IP key would make everyone in one office share it.
 
 Pipeline, never inside a transaction (INV-20):
 
@@ -162,14 +171,22 @@ general logs. Treat prompt wording as the security boundary.
 | Method | Path | Guard |
 |---|---|---|
 | GET | `/rooms` · `/rooms/:roomTypeId` | employee — room info, capacity, cover photo, effective prices and availability for a window. **Exists because §5 grants reservations and sales exactly this**, and they must not call the user tree |
-| GET | `/bookings` · `/bookings/:bookingId` | employee — read-only purchased prices and guest contact |
+| GET | `/bookings` · `/bookings/:bookingId` | employee — read-only purchased prices and guest contact. List takes `status`, `search`, `confirmedFrom`/`confirmedTo`, `limit`, `cursor`; each row carries `confirmedAt`, `holdExpiresAt`, `guestPhone`, `paymentStatus` (latest attempt), `refundStatus` and grouped `rooms[]`. Detail adds `holdExpiresAt` |
 | GET | `/bookingCalendar` | employee — per-room-type occupancy and allotment by date |
 | GET | `/exports/bookings.csv` | `requireExporter` — **not sales** (INV-37) |
+
+`confirmedFrom`/`confirmedTo` on the list use the **same confirmation-date clause in
+`Asia/Kolkata`** as the CSV below — deliberately, so a figure read on a report and a file
+exported for the same range cannot disagree. Supplying either bound excludes unconfirmed
+bookings. Added in Phase 4 for the console's Reports chart, which is by confirmation date and
+had no honest JSON source. Cases `AB-L1..AB-L5` in `tests/bookings.adminList.test.ts`.
 
 CSV: filtered by **confirmation date** in `Asia/Kolkata`, `from`/`to` inclusive, same date
 allowed. One row per booking-room with the reference repeated; the row format documented in the
 header. Guest text starting `=`, `+`, `-`, `@`, tab or CR is prefixed with `'` (INV-51). Every
-export is audited with actor and range.
+export is audited with actor and range. `confirmed_at` is written as ISO-8601 UTC
+(`2026-11-08T19:39:10Z`), formatted in SQL — node-postgres returns a Date for timestamptz, and
+interpolating that gave a locale string no reservation system could import (`EC-3b`).
 
 **Exit.** `export.csv` passes: sales gets `403`, reservations/GM/owner succeed, a guest name of
 `=SUM(A1:A9)` comes out inert, the audit row exists.

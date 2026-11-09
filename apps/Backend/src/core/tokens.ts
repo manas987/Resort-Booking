@@ -17,6 +17,7 @@ export type Principal = {
   team: 'reservations' | 'sales' | null;
   emailVerified: boolean;
   phoneVerified: boolean;
+  onboardingComplete?: boolean;
 };
 
 const JWT_ISSUER = 'resort-api';
@@ -59,6 +60,7 @@ export async function verifyAccessToken(token: string): Promise<Principal | null
       team: (payload.team as Principal['team'] | undefined) ?? null,
       emailVerified: Boolean(payload.emailVerified),
       phoneVerified: Boolean(payload.phoneVerified),
+      onboardingComplete: payload.onboardingComplete !== false,
     };
   } catch {
     return null;
@@ -107,8 +109,9 @@ export async function loadPrincipal(userId: string): Promise<Principal | null> {
     email_verified_at: string | null;
     phone_verified_at: string | null;
     is_active: boolean;
+    onboarding_complete: boolean;
   }>(
-    `SELECT kind, role, team, email_verified_at, phone_verified_at, is_active
+    `SELECT kind, role, team, email_verified_at, phone_verified_at, is_active, onboarding_complete
        FROM users WHERE id = $1`,
     [userId],
   );
@@ -121,6 +124,7 @@ export async function loadPrincipal(userId: string): Promise<Principal | null> {
     team: row.team,
     emailVerified: row.email_verified_at !== null,
     phoneVerified: row.phone_verified_at !== null,
+    onboardingComplete: row.onboarding_complete,
   };
 }
 

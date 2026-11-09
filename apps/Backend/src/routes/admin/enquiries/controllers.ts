@@ -79,6 +79,10 @@ export async function readEnquiriesController(request: Request, response: Respon
     params.push(query.assignee);
     conditions.push(`assignee_id = $${params.length}`);
   }
+  if (query.bookingId) {
+    params.push(query.bookingId);
+    conditions.push(`booking_id = $${params.length}`);
+  }
   if (query.complaint !== undefined) {
     params.push(query.complaint);
     conditions.push(`is_complaint = $${params.length}`);

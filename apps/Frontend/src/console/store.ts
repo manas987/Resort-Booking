@@ -1,9 +1,9 @@
 import { createContext, useContext } from 'react';
-import type { Command, Employee, State } from './model';
+
+/** What the shell still offers its screens, now that every one of them fetches its own data:
+ *  a toast, navigation that also closes the mobile nav, and the shell-level error slot.
+ *  It used to carry the whole fixture `state`, the fixture `actor` and an `exec` reducer. */
 export type ConsoleStore = {
-  state: State;
-  actor: Employee;
-  exec: (command: Command) => boolean;
   notify: (text: string) => void;
   navigate: (path: string) => void;
   error?: string;

@@ -1,5 +1,11 @@
 # Contracts
 
+9 Nov auth revision: Principal includes optional onboardingComplete, reloaded from the
+database by middleware. New guests cannot book until this is true as well as both contact
+verification flags. /auth/me additionally returns needsOnboarding and the caller's own
+profile (name/email/phone). Email guest_login OTP verification may create a provisional
+guest after valid proof; no account-existence result is returned before verification.
+
 **Call these from the signatures written here, not from memory.** If a signature changes, this
 file changes in the same commit. A caller written against a stale signature is the most likely
 way this project breaks.

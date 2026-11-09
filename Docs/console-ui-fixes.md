@@ -1,5 +1,17 @@
 # Console UI fixes — 9 Nov 2026
 
+## Submission check
+
+Fixed nullable Activity target IDs (and nullable system actor roles) against the real API
+contract. The running API returned 37 rows, including three null-target export events; their
+target labels formatted without throwing. Browser control timed out, so rendered-page
+verification is still unclaimed.
+
+Live mock booking smoke check: BK-RDY3TC6W reached confirmed and its database payment row
+is succeeded. This creates one synthetic reviewer booking in the configured app database.
+Full backend suite: 332 passed, 10 opt-in tests skipped, zero failed (35 files).
+Frontend: 44 tests passed, type-check/lint/build passed. Sample-card fields are decorative.
+
 ## Follow-up revision: activity-driven enquiries
 
 The user's latest request supersedes the draggable four-column design below. The board now

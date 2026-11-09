@@ -31,8 +31,19 @@ function toPublicShape(row: PromoRow) {
 
 export async function readPromosController(_request: Request, response: Response, next: NextFunction): Promise<void> {
   try {
-    const { rows } = await pool.query<PromoRow>(`SELECT id, code, kind, value, max_uses, starts_at, ends_at, is_active FROM promo_codes ORDER BY created_at DESC`);
-    response.status(200).json({ items: rows.map(toPublicShape) });
+    // `usedCount` counts redemptions that are NOT released — deliberately the same expression
+    // `core/booking.ts` enforces the cap with, so the number shown to a GM and the number that
+    // exhausts the code can never disagree. A held redemption counts against the limit while
+    // its booking is still in flight; releasing it frees the slot again.
+    const { rows } = await pool.query<PromoRow & { used_count: number }>(
+      `SELECT p.id, p.code, p.kind, p.value, p.max_uses, p.starts_at, p.ends_at, p.is_active,
+              count(r.id) FILTER (WHERE r.state <> 'released')::int AS used_count
+         FROM promo_codes p
+         LEFT JOIN promo_redemptions r ON r.promo_id = p.id
+        GROUP BY p.id
+        ORDER BY p.created_at DESC`,
+    );
+    response.status(200).json({ items: rows.map((row) => ({ ...toPublicShape(row), usedCount: row.used_count })) });
   } catch (error) {
     next(error);
   }

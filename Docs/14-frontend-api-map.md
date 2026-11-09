@@ -39,6 +39,20 @@ still read local fixtures. `Docs/08-known-issues.md` says exactly which.
 | `POST /auth/logout` | none, reads cookie | account sign-out, via `signOut()` in `lib/session.ts` — the cookie is revoked server-side, and a failed call leaves the UI signed in rather than lying |
 | `GET /auth/me` | `requireGuest` | after `/auth/callback`, and on 401-retry success |
 
+**Session restore on boot.** The access token lives in memory only, so a reload leaves nothing
+but the refresh cookie. `App.tsx` calls `restoreGuestSession()` (`lib/api.ts`) exactly once on
+mount to trade it for a session, and `lib/session.ts` reports `useSessionRestoring()` until that
+call answers. A screen whose branches are "signed in" and "signed out" must wait for it:
+`/checkout` issues no authenticated request, so nothing there ever provokes the 401 that drives
+the silent retry, and without the boot call a signed-in guest was shown "Sign in to book" for
+ever. Skipped on `/auth/callback`, where the fragment carries the newer credential.
+
+**Google sign-in verifies an email and nothing else.** The account has no phone, and
+`requireVerifiedGuest` needs both contacts, so such a guest is signed in and still cannot book.
+`CheckoutSignIn` detects this (`emailVerified && !phoneVerified`) and goes straight to
+`POST /account/contact/verify-start` for the phone — repeating the email round would verify what
+is already verified and leave them where they started.
+
 **Access token**: in the JSON body (`accessToken`), sent as `Authorization: Bearer`. **Never a
 cookie.** **Refresh token**: httpOnly cookie `resort_refresh`, path `/api/user/auth`, rotated
 every call, reuse of an already-rotated token revokes the whole session (INV-16) — the browser

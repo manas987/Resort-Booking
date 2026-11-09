@@ -32,6 +32,7 @@ export type Principal = {
   team: 'reservations' | 'sales' | null;
   emailVerified: boolean;
   phoneVerified: boolean;
+  onboardingComplete?: boolean;
 };
 
 /** `GET /content` — the approved resort facts, `is_current` rows only. The same corpus the AI

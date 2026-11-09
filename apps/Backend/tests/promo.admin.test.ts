@@ -185,4 +185,19 @@ describe('promo.admin — 2G', () => {
     expect(body.counts.held).toBe(0);
     expect(body.counts.released).toBe(0);
   });
+
+  it('PA-9: the list reports usedCount on the same basis the cap is enforced', async () => {
+    const gm = await createEmployee({ role: 'gm' });
+    const room = await createRoomType({ basePricePaise: 500000, baseAllotment: 10, physicalStock: 10 });
+    await createPromo({ code: 'PA9USED', kind: 'fixed', value: 10000, maxUses: 10 });
+    await createPromo({ code: 'PA9NONE', kind: 'fixed', value: 10000, maxUses: 10 });
+    await confirmedBookingWithPromo(room.id, 'PA9USED');
+
+    const response = await get('/api/admin/promos', gm.accessToken);
+    const body = (await response.json()) as { items: Array<{ code: string; usedCount: number; maxUses: number }> };
+    const used = body.items.find((p) => p.code === 'PA9USED')!;
+    const unused = body.items.find((p) => p.code === 'PA9NONE')!;
+    expect(used.usedCount).toBe(1);
+    expect(unused.usedCount).toBe(0);
+  });
 });

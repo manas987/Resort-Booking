@@ -62,6 +62,18 @@ describe('export.csv — 2E', () => {
     }
   });
 
+  it('EC-3b: confirmed_at is an ISO-8601 instant, not a JavaScript locale string', async () => {
+    const reservations = await createEmployee({ role: 'staff', team: 'reservations' });
+    await confirmedBooking({ confirmedAt: '2026-11-09T01:09:10+05:30' });
+
+    const response = await get('/api/admin/exports/bookings.csv?from=2026-11-09&to=2026-11-09', reservations.accessToken);
+    const csv = await response.text();
+    const confirmedAt = csv.split('\r\n')[1]!.split(',').at(-1)!;
+    expect(confirmedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    expect(csv).not.toContain('GMT');
+    expect(csv).not.toContain('Standard Time');
+  });
+
   it('EC-3/EC-5: filtered by confirmation date, not stay date', async () => {
     const reservations = await createEmployee({ role: 'staff', team: 'reservations' });
     const day1 = await confirmedBooking({ confirmedAt: '2025-06-01T10:00:00+05:30', guestName: 'Day One Guest' });

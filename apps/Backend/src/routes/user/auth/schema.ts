@@ -17,7 +17,7 @@ export const otpRequestSchema = z.object({
   destinationKind,
   destination: z.string().trim().min(1).max(200),
   purpose: z.enum(['guest_signup', 'guest_login']),
-});
+}).refine((value) => value.destinationKind !== 'email' || z.string().email().safeParse(value.destination).success, { message: 'Enter a valid email address.' });
 export type OtpRequestInput = z.infer<typeof otpRequestSchema>;
 
 export const otpVerifySchema = z.object({
@@ -25,5 +25,5 @@ export const otpVerifySchema = z.object({
   destination: z.string().trim().min(1).max(200),
   purpose: z.enum(['guest_signup', 'guest_login', 'verify_email', 'verify_phone']),
   code: z.string().trim().length(6),
-});
+}).refine((value) => value.destinationKind !== 'email' || z.string().email().safeParse(value.destination).success, { message: 'Enter a valid email address.' });
 export type OtpVerifyInput = z.infer<typeof otpVerifySchema>;

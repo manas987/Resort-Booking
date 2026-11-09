@@ -1,33 +1,117 @@
 import { Select, DateInput } from '../components/FormControls';
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'wouter';
 import { ArrowLeft, ArrowRight } from 'lucide-react';
-import { useConsole } from './store';
-import { dateText, datesBetween, inventory, manager, money } from './model';
+import { adminFetch, AdminApiError, getStaffPrincipal } from './api';
+import { dateText, datesBetween, money } from './model';
 import { Badge, Drawer, Field, PageHeading } from './ui';
+
+/**
+ * Website inventory, read from the staff API. Visible to every employee (`pageAllowed`), which
+ * is why the per-date grid reads `GET /bookingCalendar` (`requireEmployee`) and not `/rates`
+ * (`requireGm`) — sourcing rates from the GM route would 403 for reservations staff.
+ *
+ * This screen only READS. Changing a rate or an allotment is the Rates screen's job, behind the
+ * preview-then-apply handshake; the link in the heading goes there and is shown to managers only.
+ */
+
+type RoomApi = {
+  id: string;
+  name: string;
+  maxAdults: number;
+  maxChildren: number;
+  maxOccupancy: number;
+  basePricePaise: number;
+  physicalStock: number;
+  baseAllotment: number;
+  isActive: boolean;
+};
+type RoomDetailApi = RoomApi & { summary: string; amenities: string[] };
+type CalendarDay = {
+  roomTypeId: string;
+  stayDate: string;
+  allotment: number;
+  confirmed: number;
+  held: number;
+  remaining: number;
+  isBlackout: boolean;
+  pricePaise: number;
+  hasOverride: boolean;
+};
+
+function addDays(date: string, by: number): string {
+  const at = new Date(`${date}T12:00:00Z`);
+  at.setUTCDate(at.getUTCDate() + by);
+  return at.toISOString().slice(0, 10);
+}
+
 export default function Rooms() {
-  const { state, actor } = useConsole();
+  const principal = getStaffPrincipal();
+  const isManager = principal?.role === 'gm' || principal?.role === 'owner';
   const [tab, setTab] = useState('Website availability');
-  const [from, setFrom] = useState('2026-11-09');
+  const [from, setFrom] = useState(() => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date()));
   const [room, setRoom] = useState('');
   const [selected, setSelected] = useState<{ room: string; date: string } | null>(null);
-  const end = new Date(`${from || '2026-11-09'}T12:00:00Z`);
-  end.setUTCDate(end.getUTCDate() + 13);
-  const dates = datesBetween(from, Number.isNaN(end.getTime()) ? from : end.toISOString().slice(0, 10));
+  const [rooms, setRooms] = useState<RoomApi[]>([]);
+  const [details, setDetails] = useState<Record<string, RoomDetailApi>>({});
+  const [days, setDays] = useState<CalendarDay[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const dates = datesBetween(from, addDays(from, 13));
   function shift(by: number) {
-    const next = new Date(`${from}T12:00:00Z`);
-    next.setUTCDate(next.getUTCDate() + by);
-    setFrom(next.toISOString().slice(0, 10));
+    setFrom(addDays(from, by));
   }
-  const rows = state.rooms.filter((r) => !room || room === r.id);
-  const value = selected ? inventory(state, selected.room, selected.date) : null;
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      // The grid is checkout-exclusive, so the window reaches one day past the last column.
+      const [roomBody, calendarBody] = await Promise.all([
+        adminFetch<{ rooms: RoomApi[] }>('/rooms'),
+        adminFetch<{ days: CalendarDay[] }>(`/bookingCalendar?from=${from}&to=${addDays(from, 14)}`),
+      ]);
+      setRooms(roomBody.rooms);
+      setDays(calendarBody.days);
+    } catch (failure) {
+      setError(failure instanceof AdminApiError ? failure.message : 'Could not load website inventory.');
+    } finally {
+      setLoading(false);
+    }
+  }, [from]);
+
+  useEffect(() => {
+    void Promise.resolve().then(load);
+  }, [load]);
+
+  // Amenities and the summary line live on the room DETAIL endpoint, not the list, so they are
+  // fetched only when the information tab is actually opened.
+  useEffect(() => {
+    if (tab !== 'Room information' || rooms.length === 0) return;
+    let live = true;
+    Promise.all(rooms.map((r) => adminFetch<RoomDetailApi>(`/rooms/${r.id}`).catch(() => null))).then((loaded) => {
+      if (!live) return;
+      const byId: Record<string, RoomDetailApi> = {};
+      for (const detail of loaded) if (detail) byId[detail.id] = detail;
+      setDetails(byId);
+    });
+    return () => {
+      live = false;
+    };
+  }, [tab, rooms]);
+
+  const rows = rooms.filter((r) => !room || room === r.id);
+  const dayFor = (roomTypeId: string, date: string) => days.find((d) => d.roomTypeId === roomTypeId && d.stayDate === date);
+  const value = selected ? dayFor(selected.room, selected.date) : null;
+  const selectedRoom = selected ? rooms.find((r) => r.id === selected.room) : undefined;
   return (
     <>
       <PageHeading
         title="Rooms & availability"
         description="Website inventory, separate from the resort’s agency allocations."
         actions={
-          manager(actor) ? (
+          isManager ? (
             <Link className="c-primary" href="/console/rates">
               Manage rates & allotment
             </Link>
@@ -45,7 +129,7 @@ export default function Rooms() {
         <Field label="Room type">
           <Select value={room} onChange={(e) => setRoom(e.target.value)}>
             <option value="">All room types</option>
-            {state.rooms.map((r) => (
+            {rooms.map((r) => (
               <option key={r.id} value={r.id}>
                 {r.name}
               </option>
@@ -71,30 +155,42 @@ export default function Rooms() {
           </>
         )}
       </div>
+      {error && (
+        <p className="c-error" role="alert">
+          {error}{' '}
+          <button type="button" className="c-linkish" onClick={() => void load()}>
+            Try again
+          </button>
+        </p>
+      )}
+      {loading && !error && <p role="status">Loading website inventory…</p>}
       {tab === 'Room information' ? (
         <div className="c-room-grid">
           {rows.map((r) => (
             <article className="c-panel c-room-card" key={r.id}>
               <span className="c-room-illustration">
-                {r.name === 'Estate Villa' ? 'V' : 'R'}
-                <small>{r.capacity} guests</small>
+                {r.name.includes('Villa') ? 'V' : 'R'}
+                <small>{r.maxOccupancy} guests</small>
               </span>
               <h2>{r.name}</h2>
+              {/* The fixture carried an invented bed configuration; `room_types` has no such
+                  column. `summary` is the real, GM-editable line that belongs here. */}
               <p>
-                {r.beds} · up to {r.capacity} guests
+                {details[r.id]?.summary ?? `Up to ${r.maxAdults} adults and ${r.maxChildren} children`} · up to{' '}
+                {r.maxOccupancy} guests
               </p>
               <div className="c-card-tags">
-                {r.amenities.map((a) => (
+                {(details[r.id]?.amenities ?? []).map((a) => (
                   <Badge key={a}>{a}</Badge>
                 ))}
               </div>
               <dl>
                 <dt>Physical stock</dt>
-                <dd>{r.stock}</dd>
+                <dd>{r.physicalStock}</dd>
                 <dt>Base website allotment</dt>
-                <dd>{r.allotment}</dd>
+                <dd>{r.baseAllotment}</dd>
                 <dt>Base room-only rate</dt>
-                <dd>{money(r.rate)} / night</dd>
+                <dd>{money(r.basePricePaise)} / night</dd>
               </dl>
             </article>
           ))}
@@ -125,19 +221,20 @@ export default function Rooms() {
                     <th>
                       {r.name}
                       <small>
-                        {r.stock} physical · {r.allotment} base allotment
+                        {r.physicalStock} physical · {r.baseAllotment} base allotment
                       </small>
                     </th>
                     {dates.map((d) => {
-                      const v = inventory(state, r.id, d);
+                      const v = dayFor(r.id, d);
+                      if (!v) return <td key={d} />;
                       return (
                         <td key={d}>
                           <button
-                            className={`${v.blackout ? 'blackout' : v.available === 0 ? 'sold-out' : ''} ${v.overridden ? 'override' : ''}`}
+                            className={`${v.isBlackout ? 'blackout' : v.remaining === 0 ? 'sold-out' : ''} ${v.hasOverride ? 'override' : ''}`}
                             onClick={() => setSelected({ room: r.id, date: d })}
                           >
-                            <strong>{v.blackout ? '—' : v.available}</strong>
-                            <small>{v.blackout ? 'Blackout' : v.available ? money(v.rate) : 'Sold out'}</small>
+                            <strong>{v.isBlackout ? '—' : v.remaining}</strong>
+                            <small>{v.isBlackout ? 'Blackout' : v.remaining ? money(v.pricePaise) : 'Sold out'}</small>
                             {v.held > 0 && <span>{v.held} held</span>}
                           </button>
                         </td>
@@ -156,15 +253,11 @@ export default function Rooms() {
           </p>
         </>
       )}
-      {selected && value && (
-        <Drawer
-          title={state.rooms.find((r) => r.id === selected.room)!.name}
-          subtitle={dateText(selected.date)}
-          onClose={() => setSelected(null)}
-        >
+      {selected && value && selectedRoom && (
+        <Drawer title={selectedRoom.name} subtitle={dateText(selected.date)} onClose={() => setSelected(null)}>
           <dl className="c-detail-grid">
             <dt>Physical stock</dt>
-            <dd>{state.rooms.find((r) => r.id === selected.room)!.stock}</dd>
+            <dd>{selectedRoom.physicalStock}</dd>
             <dt>Website allotment</dt>
             <dd>{value.allotment}</dd>
             <dt>Confirmed</dt>
@@ -173,14 +266,14 @@ export default function Rooms() {
             <dd>{value.held}</dd>
             <dt>Available for new bookings</dt>
             <dd>
-              <strong>{value.available}</strong>
+              <strong>{value.remaining}</strong>
             </dd>
             <dt>Nightly rate</dt>
-            <dd>{money(value.rate)}</dd>
+            <dd>{money(value.pricePaise)}</dd>
             <dt>Setting source</dt>
-            <dd>{value.overridden ? 'Calendar override' : 'Base setting'}</dd>
+            <dd>{value.hasOverride ? 'Calendar override' : 'Base setting'}</dd>
             <dt>Blackout</dt>
-            <dd>{value.blackout ? 'Yes · existing commitments honoured' : 'No'}</dd>
+            <dd>{value.isBlackout ? 'Yes · existing commitments honoured' : 'No'}</dd>
           </dl>
         </Drawer>
       )}

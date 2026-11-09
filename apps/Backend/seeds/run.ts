@@ -244,7 +244,7 @@ async function seedRoomTypes() {
  * ASK about in the fixtures, and none is confirmed to exist, so nothing here claims one.
  * Keys are stable: the console edits by key, and a rename orphans its history.
  */
-const RESORT_INFO: Array<{ key: string; title: string; body: string }> = [
+export const RESORT_INFO: Array<{ key: string; title: string; body: string }> = [
   {
     key: 'booking_terms',
     title: 'Booking terms',
@@ -434,6 +434,40 @@ async function seedBookingsAndPayments(rooms: {
   await processBatch('seed-worker');
 }
 
+/**
+ * Every seeded enquiry gets at least one guest message. An enquiry with an empty thread is a
+ * state the running system cannot produce — `POST /api/user/enquiries` and the inbound injector
+ * both write the message that creates the row — and a reviewer opening one saw a detail page
+ * with nothing in it. The text is synthetic and deliberately matches the row it belongs to: the
+ * low-confidence row really is ambiguous, the complaint really is a complaint.
+ */
+const THREAD_OPENERS = {
+  unassigned: 'Hi — just browsing for now. Is there anything happening at the estate in late January?',
+  lowConfidence: 'maybe 2 or 3 of us, dates not fixed yet, whats the cheapest you have',
+  complaint:
+    'We checked out this morning. Our room was not ready at check-in and nobody explained why, so we waited in the lobby with a tired child. I would like someone to call me about it.',
+  aiFailure: 'Do you have anything free this weekend?',
+  reopened: 'Is the Garden Suite available for the first weekend of December, for two adults?',
+  reopenedReply:
+    'Thank you for writing in. The Garden Suite is available for those dates and I have noted your enquiry — do let us know if you would like us to hold it.',
+  reopenedFollowUp: 'Sorry to come back to this — our plans changed and we now need two rooms rather than one. Is that still possible?',
+  assigned1: 'Looking at the Garden Suite for two nights in February. Is breakfast included in the rate?',
+  assigned2: 'Can we add a third adult to a Plantation Cottage, or does that need the Coffee Villa?',
+} as const;
+
+async function addMessage(
+  ref: string,
+  body: string,
+  options: { direction?: 'inbound' | 'outbound'; authorUserId?: string; minutesAgo?: number } = {},
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO enquiry_messages (enquiry_id, direction, visibility, author_user_id, body, created_at)
+     SELECT id, $2, 'guest', $3, $4, now() - ($5 || ' minutes')::interval
+       FROM enquiries WHERE public_ref = $1`,
+    [ref, options.direction ?? 'inbound', options.authorUserId ?? null, body, String(options.minutesAgo ?? 0)],
+  );
+}
+
 async function seedEnquiries(staff: { reservationsStaff1: { id: string } }) {
   // The three supplied fixtures, verbatim — IDs and message text are fixed by the brief and must
   // not be edited. They arrive unclassified (ai_status='pending') and each gets a real
@@ -472,6 +506,7 @@ async function seedEnquiries(staff: { reservationsStaff1: { id: string } }) {
      VALUES ($1, 'website', 'new', 'Casual Browser', 'browser@example.test')`,
     [unassignedRef],
   );
+  await addMessage(unassignedRef, THREAD_OPENERS.unassigned);
 
   // Low-confidence, needing review.
   const lowConfidenceRef = generateEnquiryRef();
@@ -480,6 +515,7 @@ async function seedEnquiries(staff: { reservationsStaff1: { id: string } }) {
      VALUES ($1, 'website', 'new', 'room', 0.35, true, 'low_confidence', 'Unsure Guest', 'unsure@example.test')`,
     [lowConfidenceRef],
   );
+  await addMessage(lowConfidenceRef, THREAD_OPENERS.lowConfidence);
 
   // Complaint — GM alert territory regardless of confidence (INV-18).
   const complaintRef = generateEnquiryRef();
@@ -488,6 +524,7 @@ async function seedEnquiries(staff: { reservationsStaff1: { id: string } }) {
      VALUES ($1, 'email', 'new', 'complaint', true, 0.5, 'ok', 'Unhappy Guest', 'unhappy@example.test')`,
     [complaintRef],
   );
+  await addMessage(complaintRef, THREAD_OPENERS.complaint);
 
   // AI failure. `markAiFailure` in core/enquiry/processing.ts sets ai_status='failed' AND
   // notifies every active gm/owner so someone knows to retry — it deliberately does not force
@@ -512,15 +549,26 @@ async function seedEnquiries(staff: { reservationsStaff1: { id: string } }) {
       );
     }
   });
+  await addMessage(aiFailureRef, THREAD_OPENERS.aiFailure);
 
-  // A resolved thread that reopens.
+  // A resolved thread that reopens: raised three days ago, resolved two days ago, reopened
+  // since. `created_at` is set explicitly — it defaults to now(), which with a backdated
+  // `resolved_at` produced a thread resolved two days BEFORE it was raised, and the owner's
+  // average-resolution metric duly reported a negative number of minutes.
   const reopenedRef = generateEnquiryRef();
   await pool.query(
     `INSERT INTO enquiries
-       (public_ref, source, status, category, confidence, ai_status, resolved_at, reopened_count, contact_name, contact_email)
-     VALUES ($1, 'website', 'in_progress', 'room', 0.92, 'ok', now() - interval '2 days', 1, 'Reopened Guest', 'reopened@example.test')`,
+       (public_ref, source, status, category, confidence, ai_status, created_at, last_activity_at,
+        resolved_at, reopened_count, contact_name, contact_email)
+     VALUES ($1, 'website', 'in_progress', 'room', 0.92, 'ok', now() - interval '3 days', now() - interval '1 day',
+             now() - interval '2 days', 1, 'Reopened Guest', 'reopened@example.test')`,
     [reopenedRef],
   );
+  // Three messages, backdated to match the row's own timeline: raised three days ago, answered,
+  // then reopened. `reopened_count = 1` with a single message would not add up.
+  await addMessage(reopenedRef, THREAD_OPENERS.reopened, { minutesAgo: 3 * 24 * 60 });
+  await addMessage(reopenedRef, THREAD_OPENERS.reopenedReply, { direction: 'outbound', minutesAgo: 2 * 24 * 60 });
+  await addMessage(reopenedRef, THREAD_OPENERS.reopenedFollowUp, { minutesAgo: 24 * 60 });
 
   // Disabled employee with reassigned enquiries — assign two open ones to a reservations
   // staff member, disable them, then reassign.
@@ -533,6 +581,8 @@ async function seedEnquiries(staff: { reservationsStaff1: { id: string } }) {
       [ref, staff.reservationsStaff1.id],
     );
   }
+  await addMessage(assignedRef1, THREAD_OPENERS.assigned1);
+  await addMessage(assignedRef2, THREAD_OPENERS.assigned2);
   await pool.query(`UPDATE users SET is_active = false, disabled_at = now() WHERE id = $1`, [staff.reservationsStaff1.id]);
   await withTransaction((client) =>
     reassignOnEmployeeDisable(client, { targetUserId: staff.reservationsStaff1.id, actorUserId: staff.reservationsStaff1.id }),

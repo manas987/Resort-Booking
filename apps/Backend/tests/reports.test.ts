@@ -122,6 +122,20 @@ describe('reports — 2H', () => {
     expect(body.resolution.reopenedCounts).toContain(1);
   });
 
+  it('RP-4b: a thread resolved before it was raised never produces a negative average', async () => {
+    const owner = await createEmployee({ role: 'owner' });
+    // Corrupt data, not a scenario anyone should be able to create through the API — but a
+    // backdated seed produced exactly this, and the owner's metric reported -1419 minutes.
+    await seedEnquiry({ createdAt: '2026-03-10T00:00:00Z', resolvedAt: '2026-03-08T00:00:00Z' });
+    await seedEnquiry({ createdAt: '2026-03-01T00:00:00Z', resolvedAt: '2026-03-02T00:00:00Z' });
+
+    const response = await get('/api/admin/reports/metrics?from=2026-03-01&to=2026-03-31', owner.accessToken);
+    const body = (await response.json()) as { resolution: { averageMinutes: number | null; measuredCount: number } };
+    // Only the possible one is measured, and the average is the real 24 hours.
+    expect(body.resolution.measuredCount).toBe(1);
+    expect(body.resolution.averageMinutes).toBe(1440);
+  });
+
   it('RP-5: unanswered enquiries are shown as pending work, not excluded (INV-56)', async () => {
     const owner = await createEmployee({ role: 'owner' });
     await seedEnquiry({ createdAt: '2026-03-01T00:00:00Z' });

@@ -223,8 +223,8 @@ main suite cover the handling of every malformed, uncertain and failed response.
 
 ## 10. Testing
 
-**306 passing backend tests across 30 files**, plus 10 opt-in live-provider tests, and the
-frontend checks (23 assertions through `bun test` plus three plain-assert scripts). Every test runs
+**329 passing backend tests across 34 files**, plus 10 opt-in live-provider tests, and 41
+frontend checks (`bun test` files plus three plain-assert scripts). Every test runs
 against a real PostgreSQL database — `TEST_DATABASE_URL`, a different database from the dev one,
 reset between tests. Nothing mocks the database.
 
@@ -240,17 +240,25 @@ Test cases were written before the code they cover, named and recorded in `tests
 
 Stated plainly, because a reviewer finding these unannounced is worse than reading them here.
 
-- **The employee console is only partly connected to the staff API.** Staff sign-in, Rates &
-  allotment and Enquiries are wired and were verified end to end against a running API; the
-  rate/allotment rules were deleted from the browser-side copy in the same change. **Overview,
-  Bookings, Rooms, Management, Reports and Activity still read local fixtures** from
-  `src/console/model.ts`, whose header lists every limit in the remainder that disagrees with
-  `core/policy.ts`. Both core-build bullets that live in the console are therefore real; the
-  surrounding screens are not yet.
+- **The employee console reads no fixtures.** Every screen — Overview, Enquiries, Rates &
+  allotment, Bookings, Rooms, Management, Reports and the Activity log — plus staff sign-in and
+  the notification bell, calls `/api/admin/*`, and the rate and allotment rules were deleted from the
+  browser-side copy rather than left to drift from `core/policy.ts`. Verified screen by screen
+  against a running API as owner, GM, reservations and sales, with one figure per screen
+  cross-checked in `psql`. Two honest approximations remain, both documented at their call site
+  in `src/console/liveReport.ts`: inventory is not versioned, so a report cannot show what the
+  allotment *was* on a past date, only what it is; and "awaiting reply" is approximated by
+  `status = 'new'`, which §16 grounds but which is not the same measurement. Two fixture modules
+  (`src/console/model.ts`'s bulk and `src/console/reporting.ts`, ~900 lines) are now unreachable
+  and survive only because a check script still imports them.
 - **Public pages are not pre-rendered.** They need JavaScript to render.
 - **Performance budgets are measured only in part.** The hero image is measured: 96 KB against
   901 KB previously, recorded in `03-decisions.md`. The initial-JS and above-fold targets have
   **not** been measured on a throttled cold load and remain targets, not results.
+- **The Mapbox bundle is 1.88 MB.** It is lazy-loaded behind the location map and off the
+  critical path, so it never blocks first render and never loads for a visitor who does not
+  reach that section — but it is not split further, and on a slow connection the map is the
+  slowest thing on the site.
 - **No rendered-UI verification.** The development environment had no browser, so every layout
   claim rests on type-checking, lint, static render output and the check scripts.
 - **No live Google OAuth call has ever been made.** The redirect flow is implemented and

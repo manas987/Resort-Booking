@@ -1,5 +1,14 @@
 # Known issues
 
+## Submission verification limits — 9 Nov
+
+There is still no app-wide render error boundary; a different uncaught render error can
+blank the app. The nullable Activity target crash is fixed without adding fallback UI.
+The payment card panel is decorative, uses read-only sample values and never sends card data.
+It is a mock payment adapter, not a live payment integration. Browser control timed out:
+live API and database checks do not establish visual/browser or live Google-provider success.
+OTP delivery remains mocked; codes are exposed only for the configured reviewer allowlist.
+
 ## Console presentation update — 9 Nov 2026
 
 Production-style copy no longer displays demo/synthetic/local captions. This does not change
@@ -182,3 +191,86 @@ identically. The call sites do not change, and `resetRateLimits()` stays the tes
   old screen's features against the new one deliberately, and do not delete the old file until
   that diff is empty — especially here, where `src/console/` is untracked, so a deleted file is
   not recoverable from `git`.
+
+## The console is wired; `model.ts` and `reporting.ts` are dead code
+
+All eight console screens now read the staff API — `adminFetch` counts are non-zero on every one
+and no screen renders a fixture. What is left behind is the fixture module itself: `model.ts`
+still holds `seedState`, `transition` and the synthetic domain, and `reporting.ts` is imported by
+nothing but `checks/console.test.ts`. They are unreachable from the UI, so nothing fake renders,
+but they are ~900 lines that should be deleted. `model.ts` must keep its formatters
+(`money`, `dateText`, `timeText`, `datesBetween`) and its permission predicates
+(`pageAllowedFor`, `canExportRole`), which the screens do still import.
+
+## Backend fields added for the console, and why
+
+Wiring the screens exposed six places where the existing markup had no honest source. Each was
+added to the API rather than faked or dropped:
+
+- `GET /bookings` — `confirmedAt`, `confirmedFrom`/`confirmedTo`, `holdExpiresAt`, `guestPhone`,
+  `paymentStatus`, `refundStatus`, grouped `rooms[]`.
+- `GET /bookingCalendar` — `pricePaise`, `hasOverride`, and a `confirmed`/`held` split of
+  `committed`. `remaining` still comes only from `core/inventory.ts` (INV-1, INV-10).
+- `GET /promos` — `usedCount`, counted on the same `state <> 'released'` basis the cap enforces.
+- `GET /staff` — `lastSignInAt`, from the newest `sessions` row; there is no
+  `users.last_login_at` and adding one would need a migration.
+- `GET /resortInfo?history=true` — superseded versions with their editor.
+- `GET /enquiries?bookingId=` — so a booking's related enquiry link resolves.
+- Admin auth responses carry `name`/`username` alongside the principal (never in the JWT).
+
+## The console used to name the wrong person
+
+Until the screens were wired, `Console.tsx` kept two identities: the real `StaffPrincipal` from
+the server, and a LOCAL fixture employee matched by role. The sidebar, the profile drawer and the
+Overview greeting all read the fixture one — so a signed-in GM saw a fixture GM's name and email.
+Both are now the server principal, which is why the admin auth response had to start returning a
+display name.
+
+## A long-lived dev database drifts from the seed, silently
+
+`bun run seed` refuses a non-empty database, which is the right default — it is also why this
+database ran for weeks with two of the AI corpus's seven sections. The five others were added to
+`seeds/run.ts` later and nothing applied them, so the drafter was grounded in a third of its facts
+and nobody noticed: the behaviour it produced ("our team will confirm") is a perfectly legitimate
+output for a question the corpus does not cover. The same drift gave seven enquiries no messages
+at all.
+
+Both were repaired with targeted inserts against the existing rows rather than a reseed, which
+would have destroyed the bookings, payments and refunds the demo depends on.
+
+There is no detector for this. The only reliable check is to reseed a scratch database and diff
+the two — worth doing before a demo, and the reason `seed` keeps its `--force` escape hatch
+rather than being made idempotent (an idempotent seed would be a migration, and migrations are
+where schema belongs, not fixtures).
+
+## The guest app had no session restore, and the doc said it did
+
+`Docs/14-frontend-api-map.md` has listed `POST /auth/refresh` as used by "`api.ts`'s silent 401
+retry, **and once on app boot**" since phase 3 was written. The boot call was never implemented.
+
+Nothing caught it, for a specific reason: the silent retry covers every screen that reads
+something private, so `/account/*` and the booking pages restored a session as a side effect of
+their first 401. `/checkout` reads nothing private — `GET /rooms` is public, `POST /quotes` runs
+under `optionalGuest` and answers 200 for an anonymous caller, and `GET /quotes/:id` answers 404
+rather than 401 for a quote it does not own (INV-34). So checkout was the one screen that never
+provoked a 401, and it is also the one screen whose entire right-hand column branches on being
+signed in. A signed-in guest who reloaded saw "Sign in to book" with no way past it.
+
+The employee console had the same architecture and did not have the bug, because
+`restoreStaffSession()` was written when the console was wired. The guest side predates it.
+
+The lesson worth keeping: "the token is restored lazily on 401" is only true for screens that
+make an authenticated request. A screen can be entirely public and still need to know who is
+signed in.
+
+## Google sign-in cannot complete a booking on its own
+
+Google verifies an email. It supplies no phone number, and `requireVerifiedGuest` requires both
+contacts before a booking — correctly, since the reservations team calls the guest. So a guest
+who signs in with Google is genuinely signed in and genuinely cannot book yet.
+
+The sign-in form now collects only the missing contact, so the path out is one code rather than
+two. What is NOT fixed is the wording: checkout still says "Sign in to book" to someone who is
+already signed in and only needs to verify a phone. The copy is wrong, the button goes to the
+right place, and the user's standing instruction is that the UI does not change before
+submission.

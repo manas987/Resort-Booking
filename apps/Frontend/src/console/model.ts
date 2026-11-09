@@ -202,7 +202,11 @@ export const nights = (b: Booking) => Math.round((Date.parse(b.departure) - Date
 export const bookingValue = (b: Booking) =>
   b.lines.reduce((sum, line) => sum + line.nightly * line.quantity * nights(b), 0) - b.discount + b.tax;
 export const manager = (e: Employee) => e.role !== 'staff';
-export const canExport = (e: Employee) => manager(e) || e.team === 'reservations';
+/** Mirrors the server's `requireExporter` (INV-37): reservations, GM or owner — never sales.
+ *  Hiding the button is presentation; the route enforces it regardless (INV-33). */
+export const canExportRole = (role: string, team: string | null) =>
+  role === 'gm' || role === 'owner' || (role === 'staff' && team === 'reservations');
+export const canExport = (e: Employee) => canExportRole(e.role, e.team);
 export const visibleThreads = (s: State, e: Employee) => s.threads.filter((t) => manager(e) || t.assignee === e.id);
 export function waitingMinutes(s: State, t: Thread) {
   const guest = t.messages.findLast((m) => m.kind === 'guest');
@@ -210,10 +214,17 @@ export function waitingMinutes(s: State, t: Thread) {
   if (t.status === 'Resolved' || !guest || (reply && Date.parse(reply.time) >= Date.parse(guest.time))) return null;
   return Math.max(0, Math.round((Date.parse(now(s)) - Date.parse(guest.time)) / 60000));
 }
-export function pageAllowed(e: Employee, page: string) {
+/** Which console pages a role may open. Mirrors the server guards exactly:
+ *  overview/enquiries/bookings/rooms = `requireEmployee`, rates/management = `requireGm`,
+ *  reports/activity = `requireOwner`. Hiding a link is never the control (INV-33) — the route
+ *  refuses regardless — but a link that only leads to a 403 is a dead button. */
+export function pageAllowedFor(role: string, page: string) {
   if (['overview', 'enquiries', 'bookings', 'rooms'].includes(page)) return true;
-  if (['rates', 'management'].includes(page)) return manager(e);
-  return ['reports', 'activity'].includes(page) && e.role === 'owner';
+  if (['rates', 'management'].includes(page)) return role !== 'staff';
+  return ['reports', 'activity'].includes(page) && role === 'owner';
+}
+export function pageAllowed(e: Employee, page: string) {
+  return pageAllowedFor(e.role, page);
 }
 export function inventory(s: State, roomId: string, date: string) {
   const at = now(s);

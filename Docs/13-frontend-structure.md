@@ -52,11 +52,12 @@ pathname, so the browser never reloads.
 
 ## Components added in 3E
 
-- `Checkout.tsx` — `/checkout`: quote, full §8D breakdown, promo, main-guest contact, inline
-  sign-in, payment. Owns the idempotent `POST /bookings` → `POST /payments/:id/attempts` →
+- `Checkout.tsx` — `/checkout`: internal review/pay steps, quote, promo, main-guest contact
+  and missing-contact verification before mock payment. Owns `POST /bookings` → `POST /payments/:id/attempts` →
   poll-to-confirmed chain and every booking error branch.
-- `CheckoutSignIn.tsx` — real `POST /auth/register` → OTP (email, then phone) flow, used only
-  by `/checkout`. Not the same code path as `/signin` (still demo-only — see `03-decisions.md`).
+- `CheckoutSignIn.tsx` — shared email-first OTP/onboarding flow on /signin, plus
+  verificationOnly on checkout's pay step. New accounts verify phone then confirm name;
+  returning accounts enter after email proof. Google prefill comes from the server profile.
 - `BookingConfirmation.tsx` — `/booking/:bookingId`.
 
 ## State rules

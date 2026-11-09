@@ -54,7 +54,8 @@ async function respondWithSession(
     ipHash: ipHash(request),
   });
   setRefreshCookie(response, refresh.token, refresh.expiresAt);
-  response.status(200).json({ accessToken, principal });
+  const { rows } = await pool.query<{ onboarding_complete: boolean }>('SELECT onboarding_complete FROM users WHERE id = $1', [userId]);
+  response.status(200).json({ accessToken, principal, needsOnboarding: !rows[0]?.onboarding_complete });
 }
 
 /** Creates the users row. No session yet — the guest logs in by verifying the contact they
@@ -140,12 +141,22 @@ export async function verifyOtpController(
       `SELECT id FROM users WHERE kind = 'guest' AND lower(${column}) = lower($1)`,
       [destination.trim()],
     );
-    const guest = rows[0];
+    let guest = rows[0];
+    if (!guest && destinationKind === 'email' && purpose === 'guest_login') {
+      const { rows: created } = await pool.query<{ id: string }>(
+        `INSERT INTO users (kind, role, name, email, email_verified_at, onboarding_complete)
+         VALUES ('guest', 'guest', 'Guest', lower($1), now(), false)
+         ON CONFLICT (lower(email)) WHERE email IS NOT NULL
+         DO UPDATE SET email_verified_at = now() WHERE users.kind = 'guest'
+         RETURNING id`, [destination.trim()],
+      );
+      guest = created[0];
+    }
     if (!guest) {
       next(new AppError('validation_failed', 'That code is invalid or has expired.'));
       return;
     }
-    if (purpose === 'guest_signup') {
+    if (purpose === 'guest_signup' || purpose === 'guest_login') {
       await pool.query(`UPDATE users SET ${verifiedColumn} = now() WHERE id = $1`, [guest.id]);
     }
     await respondWithSession(response, guest.id, request);
@@ -230,8 +241,8 @@ export async function findOrCreateGuestFromGoogle(input: {
   const emailVerifiedAt = !emailCollides && email && input.emailVerified ? 'now()' : 'NULL';
 
   const { rows: created } = await pool.query<{ id: string }>(
-    `INSERT INTO users (kind, role, name, email, email_verified_at, google_sub)
-     VALUES ('guest', 'guest', $1, $2, ${emailVerifiedAt}, $3)
+    `INSERT INTO users (kind, role, name, email, email_verified_at, google_sub, onboarding_complete)
+     VALUES ('guest', 'guest', $1, $2, ${emailVerifiedAt}, $3, false)
      RETURNING id`,
     [input.name, email, input.sub],
   );
@@ -290,6 +301,10 @@ export async function googleCallbackController(
     const email = typeof payload.email === 'string' ? payload.email : null;
     const emailVerified = Boolean(payload.email_verified);
     const name = typeof payload.name === 'string' ? payload.name : 'Guest';
+    if (!email || !emailVerified) {
+      next(new AppError('validation_failed', 'A verified Google email is required.'));
+      return;
+    }
 
     const guest = await findOrCreateGuestFromGoogle({ sub, email, emailVerified, name });
     const principal = await loadPrincipal(guest.id);
@@ -339,11 +354,16 @@ export async function logoutController(
   response.status(204).end();
 }
 
-export function readMeController(_request: Request, response: Response, next: NextFunction): void {
+export async function readMeController(_request: Request, response: Response, next: NextFunction): Promise<void> {
   const principal = response.locals.principal as Principal | undefined;
-  if (!principal) {
-    next(unauthenticated());
-    return;
-  }
-  response.status(200).json({ principal });
+  if (!principal) { next(unauthenticated()); return; }
+  try {
+    const { rows } = await pool.query<{ name: string; email: string | null; phone: string | null; onboarding_complete: boolean }>(
+      'SELECT name, email, phone, onboarding_complete FROM users WHERE id = $1', [principal.userId],
+    );
+    const profile = rows[0];
+    if (!profile) { next(unauthenticated()); return; }
+    response.status(200).json({ principal, needsOnboarding: !profile.onboarding_complete,
+      profile: { name: profile.name, email: profile.email, phone: profile.phone } });
+  } catch (error) { next(error); }
 }
