@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>The Quiet Estate — Coffee estate stays in Chikkamagaluru</title>
+    <meta
+      name="description"
+      content="Rooms and villas on a coffee estate in the hills of Chikkamagaluru. Check live availability, see the price with tax, and book direct."
+    />
+    <meta name="theme-color" content="#223a2c" />
+
+    <!-- The hero is the first paint and the whole mobile image budget, so the browser is told
+         about it before it has parsed any JS. Kept in step with HERO_PHOTO_ID in src/App.tsx:
+         the imagesrcset below must match the one that component renders, or this preloads a
+         file the page never uses. -->
+    <link
+      rel="preload"
+      as="image"
+      imagesrcset="
+        https://images.unsplash.com/photo-1449158743715-0a90ebb6d2d8?auto=format&amp;fit=crop&amp;w=640&amp;q=75 640w,
+        https://images.unsplash.com/photo-1449158743715-0a90ebb6d2d8?auto=format&amp;fit=crop&amp;w=960&amp;q=75 960w,
+        https://images.unsplash.com/photo-1449158743715-0a90ebb6d2d8?auto=format&amp;fit=crop&amp;w=1280&amp;q=75 1280w,
+        https://images.unsplash.com/photo-1449158743715-0a90ebb6d2d8?auto=format&amp;fit=crop&amp;w=1920&amp;q=75 1920w"
+      imagesizes="100vw"
+      fetchpriority="high"
+    />
+    <link rel="preconnect" href="https://images.unsplash.com" crossorigin />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,34 @@
+{
+  "name": "resort-direct-booking",
+  "private": true,
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "check-types": "turbo run check-types",
+    "test": "turbo run test",
+    "format": "prettier --write \"**/*.{ts,tsx,md}\"",
+    "migrate": "bun run --cwd apps/Backend migrate",
+    "seed": "bun run --cwd apps/Backend seed",
+    "api": "bun run --cwd apps/Backend dev",
+    "worker": "bun run --cwd apps/Backend worker",
+    "web": "bun run --cwd apps/Frontend dev"
+  },
+  "devDependencies": {
+    "prettier": "3.9.6",
+    "turbo": "^2.11.10",
+    "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "bun",
+      "version": "1.3.9"
+    }
+  },
+  "workspaces": [
+    "apps/*"
+  ]
+}

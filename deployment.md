@@ -1,0 +1,173 @@
+# deployment.md
+
+How to run this project, and what it needs. Environment variables appear here **by name only** —
+no values, ever.
+
+Nothing in this document claims a live deployment. It has been run locally against a local
+PostgreSQL, and that is the only thing asserted.
+
+---
+
+## 1. Requirements
+
+| | Version used |
+|---|---|
+| [Bun](https://bun.sh) | 1.3.9 |
+| PostgreSQL | 14 or later (needs `gen_random_uuid()`, partial unique indexes, `FOR UPDATE OF`) |
+| A Google Gemini API key | For the AI step. Without one the app runs; enquiry classification does not |
+
+No Node, no Docker, no Redis, no other service.
+
+## 2. Install
+
+```bash
+bun install
+```
+
+One lockfile at the repository root covers both apps (Turborepo + Bun workspaces).
+
+## 3. Databases
+
+Two, and they must be different — **the test suite truncates every table between cases.**
+
+```bash
+createdb resort_dev
+createdb resort_test
+```
+
+Keep the test database local even if the dev one is hosted. The suite resets every table
+between each of ~300 cases; over a network on a free tier that is slow and pointless.
+
+## 4. Configure
+
+```bash
+cp apps/Backend/.env.example apps/Backend/.env
+```
+
+Then fill it in. `apps/Backend/.env.example` is the authoritative list and explains each entry;
+the names are:
+
+| Name | Notes |
+|---|---|
+| `NODE_ENV` | `development` or `production` |
+| `PORT` | The API port. `3001` in development, because the Vite dev server proxies `/api` there |
+| `DATABASE_URL` | The application database. On a hosted provider, set an explicit `sslmode` rather than relying on a default |
+| `TEST_DATABASE_URL` | **A different database.** Destructive |
+| `APP_ORIGIN` | Where the browser loads the site from. Drives the CORS allowlist and the refresh-cookie scope. No trailing slash |
+| `API_PUBLIC_ORIGIN` | Where the API is publicly reachable. No trailing slash |
+| `JWT_SECRET` | Signs short-lived access tokens. At least 32 characters. Refresh credentials are opaque random values stored as hashes and need no secret |
+| `GOOGLE_CLIENT_ID` | Google sign-in. Both Google values together, or neither |
+| `GOOGLE_CLIENT_SECRET` | As above |
+| `GEMINI_API_KEY` | Enables the AI step |
+| `GEMINI_MODEL` | The model id, e.g. a Gemini Flash variant |
+| `DEMO_MODE` | See section 8. **Must be off in production** |
+
+There is deliberately no `GOOGLE_REDIRECT_URI`: it is derived as
+`<API_PUBLIC_ORIGIN>/api/user/auth/google/callback`, because that route belongs to this codebase
+and a hand-maintained copy could only drift away from it. Register exactly that URI with Google.
+
+Secrets are read from the environment only. They are never committed, never reach the client
+bundle, and never appear in a log line.
+
+## 5. Migrate and seed
+
+```bash
+bun run migrate     # applies apps/Backend/migrations/*.sql, checksummed and idempotent
+bun run seed        # synthetic fixtures; refuses a non-empty database unless --force
+```
+
+Re-running `migrate` is a no-op; a modified migration file is refused on checksum rather than
+silently reapplied.
+
+The seed creates four room types totalling 76 keys, rate and blackout overrides, bookings in
+every lifecycle state (confirmed, pending payment, payment failed, expired, late refund),
+promo codes, the versioned approved content, staff accounts in each role, guest accounts, and
+the three enquiry fixtures from the brief — verbatim, with their original IDs and message text,
+each with a real `classify_enquiry` job queued so the worker classifies them for real.
+
+## 6. Preflight
+
+```bash
+bun run --cwd apps/Backend preflight
+```
+
+Checks the environment, the database connection, applied migrations and — with a real call —
+whether the Gemini key and model actually answer, distinguishing "key rejected" from "live but
+out of quota". Run this before concluding something is misconfigured.
+
+## 7. Run
+
+Three processes. **All three, or the app will appear to hang at payment.**
+
+```bash
+bun run api        # the HTTP API          (apps/Backend, :3001 by default)
+bun run worker     # the job worker        (separate process, no HTTP port)
+bun run web        # the Vite dev server   (apps/Frontend, :5173)
+```
+
+**The worker is not optional.** Payment confirmation and AI classification are done by it, not
+by the request that triggers them. Without it a booking sits at `pending_payment` for ever and
+enquiries stay unclassified, with no error anywhere — the request succeeded, the follow-up work
+simply never ran.
+
+**The API and the worker read `DATABASE_URL` independently at startup.** Pointing them at
+different databases — including briefly, while changing the value — produces exactly that
+symptom. If a booking will not confirm, check this first.
+
+In development the browser talks only to the Vite dev server, which proxies `/api` to
+`http://localhost:3001` (`apps/Frontend/vite.config.ts`). That keeps every request relative,
+keeps the refresh cookie first-party, and removes CORS from the development loop.
+
+For production, `bun run build` emits static assets to `apps/Frontend/dist`; serve them from any
+static host and run the API and worker as long-lived processes. `GET /healthz` is liveness (it
+touches nothing else, so a database blip does not get the container restarted into the same
+blip). `GET /readyz` is readiness and requires a working database round trip; its `configured`
+block reports which optional integrations this instance is set up for, which is not a claim that
+they are reachable.
+
+## 8. `DEMO_MODE`
+
+With `DEMO_MODE=true`:
+
+- `POST /api/mock/inbound/:channel` accepts injected email and WhatsApp enquiries, so the
+  multi-channel inbox can be exercised without a mail server. The console's scenario panel
+  exposes this.
+- The OTP endpoints return a `demoCode` in the response — **only** for the two reserved demo
+  destinations (`demo@resort.test` and its matching number), never for any other identity. The
+  seed creates that reviewer account with both contacts pre-verified.
+- The payment endpoint honours an `outcome` of `succeed`, `decline` or `succeed_late`, so
+  failure and late-payment paths are reachable on demand. Otherwise every attempt succeeds.
+
+**Turn it off in production.** It is a reviewer convenience, and it reveals one-time codes.
+
+## 9. Verifying the install
+
+```bash
+bun run check-types                       # both apps
+bun run --cwd apps/Backend test           # 306 tests; needs TEST_DATABASE_URL
+bun run --cwd apps/Frontend lint
+bun run --cwd apps/Frontend check         # check scripts + frontend test files
+```
+
+Optional, costs real tokens and needs a network:
+
+```bash
+bun run --cwd apps/Backend test:ai-live   # exercises the real Gemini model
+```
+
+Then, by hand: pick dates on the home page, open a room, check the availability calendar, add
+two different room types, go to checkout, sign in as the demo reviewer with the code the OTP
+response returns, pay with the test selector, and watch the booking poll through to confirmed.
+The reference appears on the confirmation page and in `psql`.
+
+## 10. Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| Booking stuck at `pending_payment` | The worker is not running, or it and the API are pointed at different `DATABASE_URL`s |
+| Enquiries stuck at `ai_status = 'pending'` | Same — the worker runs classification |
+| `readyz` returns 503 | The database is unreachable. The real driver message is in the API log, with the request id |
+| Employee login returns 401 after a few tries | Working as intended: per-account brute-force limiting. Wait for the window to pass |
+| `seed` refuses to run | The database is not empty. Use a fresh one, or pass `--force` if you mean it |
+| Gemini calls fail | Run the preflight; it distinguishes a rejected key from an exhausted quota |
+| No `demoCode` in an OTP response | That identity is not one of the two reserved demo destinations, by design |

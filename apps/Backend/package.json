@@ -1,0 +1,32 @@
+{
+  "name": "backend",
+  "private": true,
+  "type": "module",
+  "module": "src/index.ts",
+  "scripts": {
+    "dev": "bun --hot src/index.ts",
+    "start": "bun src/index.ts",
+    "worker": "bun src/jobs/worker.ts",
+    "migrate": "bun migrations/migrate.ts",
+    "preflight": "bun scripts/preflight.ts",
+    "seed": "bun seeds/run.ts",
+    "test": "bun test",
+    "check-types": "tsc --noEmit",
+    "test:ai-live": "AI_LIVE=1 bun test tests/ai.live.test.ts"
+  },
+  "dependencies": {
+    "@google/genai": "^1.33.0",
+    "express": "^5.1.0",
+    "jose": "^6.1.0",
+    "pg": "^8.16.3",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/express": "^5.0.3",
+    "@types/pg": "^8.15.5"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
