@@ -186,10 +186,11 @@ describe('booking.rollback — 1G', () => {
 
     expect(first.status).toBe(201);
     expect(second.status).toBe(409);
-    const refused = (await second.json()) as { error: { code: string; details: { reference: string } } };
+    const refused = (await second.json()) as { error: { code: string; details: { reference: string; bookingId: string } } };
     expect(refused.error.code).toBe('quote_already_booked');
-    const { reference } = (await first.json()) as { reference: string };
+    const { reference, bookingId } = (await first.json()) as { reference: string; bookingId: string };
     expect(refused.error.details.reference).toBe(reference);
+    expect(refused.error.details.bookingId).toBe(bookingId);
 
     const { rows } = await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM bookings`);
     expect(rows[0]!.n).toBe(1);

@@ -124,6 +124,24 @@ test('nullable audit targets use their kind without slicing null', () => {
   expect(audit).toContain(': row.targetKind');
 });
 
+test('payment confirmation and duplicate-quote recovery link to the booking ID, not its reference', () => {
+  const checkout = source('../src/components/Checkout.tsx');
+  expect(checkout).toContain('pollBookingStatus(booking.reference, booking.bookingId)');
+  expect(checkout).toContain('navigate(`/booking/${bookingId}`)');
+  expect(checkout).not.toContain('navigate(`/booking/${reference}`)');
+  expect(checkout).toContain('existingBookingId ? `/booking/${existingBookingId}`');
+});
+
+test('checkout accepts the reserved reviewer phone and reads existing guest details', () => {
+  finishRestoring();
+  setSession({ accessToken: 'test-only', principal: VERIFIED_GUEST });
+  try {
+    const html = renderCheckout();
+    expect(html).toContain('pattern="[0-9]{10}"');
+    expect(source('../src/components/Checkout.tsx')).toContain("('/auth/me', { signal: controller.signal })");
+  } finally { clearSession(); }
+});
+
 test('room availability is read-only and does not turn a loading state into sold-out dates', () => {
   const html = renderToStaticMarkup(<AvailabilityCalendar slug="garden-suite" checkIn="2026-11-12" checkOut="2026-11-19" />);
   expect(html).toContain('Checking availability');

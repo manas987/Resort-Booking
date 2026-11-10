@@ -1,10 +1,15 @@
-# deployment.md
+**GitHub:** https://github.com/manas987/Resort-Booking
+
+# Deployment and reviewer guide
+
+
+Project: **The Quiet Estate — direct booking and AI enquiry routing.**
 
 How to run this project, and what it needs. Environment variables appear here **by name only** —
 no values, ever.
 
-Nothing in this document claims a live deployment. It has been run locally against a local
-PostgreSQL, and that is the only thing asserted.
+No hosted application URL has been verified. The deployment sections describe the required
+Vercel and Railway setup; local API, database and mock-payment flows have been checked.
 
 ---
 
@@ -21,6 +26,8 @@ No Node, no Docker, no Redis, no other service.
 ## 2. Install
 
 ```bash
+git clone https://github.com/manas987/Resort-Booking.git
+cd Resort-Booking
 bun install
 ```
 
@@ -84,6 +91,9 @@ bun run migrate     # applies apps/Backend/migrations/*.sql, checksummed and ide
 bun run seed        # synthetic fixtures; refuses a non-empty database unless --force
 ```
 
+Existing installations must also apply `002_guest_onboarding.sql` before restarting services.
+It adds the registration-completion flag without resetting existing accounts.
+
 Re-running `migrate` is a no-op; a modified migration file is refused on checksum rather than
 silently reapplied.
 
@@ -142,14 +152,14 @@ they are reachable.
 The seed creates these. Every one is synthetic, and so is every booking, enquiry and price they
 can see.
 
-**Staff console** — password `ReviewerDemo!2026` for all six. It is a seed constant, not an
+**Staff console** — password `ReviewerDemo!2026` for active accounts below. It is a seed constant, not an
 environment secret; change it before any deployment that is not a review.
 
 | Username | Who | Sees |
 |---|---|---|
 | `owner` | Asha Rao | Everything, including reports and the activity log |
 | `gm` | Vikram Shetty | Rates, allotment, promos, team, resort information. No reports, no audit |
-| `priya` | Priya Nair, reservations | Enquiries assigned to them, bookings, rooms, the calendar |
+| `priya` | Priya Nair, reservations | Deliberately disabled fixture; sign-in must be rejected |
 | `arjun` | Arjun Menon, reservations | As above — a second account, for testing assignment between two people |
 | `divya` | Divya Kumar, sales | Wedding and offsite enquiries. **No CSV export** (INV-37) |
 | `rahul` | Rahul Varma, sales | As above |
@@ -157,9 +167,26 @@ environment secret; change it before any deployment that is not a review.
 Signing in as more than one of these is the quickest way to see that the permission matrix is
 enforced server-side: a GM gets `403` on `/api/admin/reports`, not a hidden menu item (INV-33).
 
-**Guest site** — `demo@resort.test`, with its matching phone number. Both contacts are
+**Guest site** — `demo@resort.test`, phone `+910000000000`. Both contacts are
 pre-verified. Under `DEMO_MODE` its OTP response carries the code, so there is no mail server in
 the loop; that applies to these two reserved destinations only (section 12).
+
+### Reviewer walkthrough
+
+1. Start all three processes above. Open `http://localhost:5173` for guests or
+   `http://localhost:5173/console` for staff. Set both demo flags for a review environment only.
+2. For staff, use `owner` and the password above to explore rates, bookings, enquiries and logs.
+3. For guests, select dates, add rooms and open checkout. Sign in with `demo@resort.test`.
+   Use the fresh OTP displayed by the demo UI; there is no fixed OTP. If phone verification is
+   requested, use the reserved demo phone above.
+4. Continue to the test payment step, pay and wait for confirmation. No real card or money is used.
+5. In the employee inbox, inspect the brief's three sample enquiries and AI drafts. Replies require
+   staff approval; outbound email and WhatsApp are simulated.
+
+Existing guests return after email OTP or Google verification. New guests also verify their
+phone and confirm an editable name (prefilled from Google when available). Real email/SMS delivery
+is not connected: arbitrary new contacts cannot receive OTP messages. Use the seeded contacts
+for the reviewer demonstration.
 
 ## 9. Deploying the frontend (Vercel)
 
@@ -197,11 +224,13 @@ Without it the host returns 404 for every route but `/`.
 **Two services from the same repository.** The worker is not a background thread of the API; it
 is a second process, and section 7 explains what breaks without it.
 
+Install dependencies with `bun install` at the repository root in both services, using Bun.
+
 | | Service 1 — API | Service 2 — worker |
 |---|---|---|
-| Start command | `bun run api` | `bun run worker` |
+| Start command (repository root) | `bun run --cwd apps/Backend start` | `bun run worker` |
 | Public domain | Yes | **No.** It serves no HTTP |
-| Needs | All variables in section 4 | The same `DATABASE_URL`, `GEMINI_API_KEY`, `GEMINI_MODEL` |
+| Needs | Backend variables in section 4 | Same backend environment as API; shared configuration validates required variables at startup |
 | Health check | `GET /readyz` | None available |
 
 1. Add the PostgreSQL plugin and reference its connection string as `DATABASE_URL` in **both**
@@ -258,9 +287,10 @@ With `DEMO_MODE=true`:
 
 ```bash
 bun run check-types                       # both apps
-bun run --cwd apps/Backend test           # 329 tests across 34 files; needs TEST_DATABASE_URL
+bun run --cwd apps/Backend test           # needs a separate TEST_DATABASE_URL
 bun run --cwd apps/Frontend lint
-bun run --cwd apps/Frontend check         # 41 checks: check scripts + frontend test files
+bun run --cwd apps/Frontend check         # check scripts + frontend test files
+bun run --cwd apps/Frontend build
 ```
 
 Optional, costs real tokens and needs a network:
@@ -276,12 +306,16 @@ The reference appears on the confirmation page and in `psql`.
 
 ## 14. Known deployment limitations
 
+Latest local checks: 44 frontend tests passed; backend: 332 passed, 10 skipped, no failures.
+A local HTTP walkthrough completed a confirmed booking and succeeded mock payment. Browser
+visual checks and live Google OAuth were not verified during the final fixes.
+
 Stated here rather than discovered later.
 
-- **Nothing above has been deployed.** The sections on Vercel and Railway are instructions
-  derived from how this application is built, not a report of a deployment that happened. The
-  only thing asserted anywhere in this document is that it runs locally against a local
-  PostgreSQL.
+- **Hosted deployment has not been verified.** Check API proxying, refresh cookies, Google
+  redirects and worker processing on the actual domains before a hosted demonstration.
+- **India hosting is required by the brief.** Application/database region selection and data
+  residency have not been verified; confirm both with the hosting providers.
 - **No live Google OAuth call has ever been made.** The redirect flow is implemented and tested
   against its own contract. Section 11 is untested against Google itself.
 - **Rate-limit counters live in the API process.** Two API instances each keep their own, so

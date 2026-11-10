@@ -1,4 +1,7 @@
+**GitHub:** https://github.com/manas987/Resort-Booking
+
 # Technical Design Document
+
 
 **Direct booking and AI enquiry routing for a Chikkamagaluru coffee-estate resort**
 Internship trial build · 2026-11-09
@@ -37,11 +40,11 @@ synthetic. Section 11 states every limitation plainly rather than burying it.
 | PostgreSQL | `SELECT … FOR UPDATE`, partial unique indexes and `ON CONFLICT` do the heavy lifting |
 | Vite 8 + React 19 + TypeScript | No framework beyond routing; the guest JS budget is tight |
 | `wouter` for routing | ~2 KB against react-router's bulk |
-| **Google Gemini, not Anthropic Claude** | A deliberate deviation from the spec, recorded with its reason in `03-decisions.md`. The provider is isolated behind one file, so swapping back is a change in `adapters/ai/gemini.ts` and nowhere else |
+| **Google Gemini** | Real structured-output classification and drafting. This differs from the internal expanded plan naming Claude; the client brief does not mandate a provider. The provider adapter is isolated |
 
 **Deliberately not used:** no ORM, no Next.js, no Redis, no vector database or embeddings, no
 document ingestion, no real payment provider, no real WhatsApp or Gmail integration, no
-microservices, no WebSockets, no CSS framework, no date library, no chart library. Each was
+microservices, no WebSockets, no chart service or separate search infrastructure. Each was
 considered and rejected as unnecessary for this slice.
 
 ## 3. Shape of the system
@@ -120,8 +123,8 @@ the nights. A separate test asserts no deadlock under crossing lock order.
 | `resort_info` | Versioned approved content. A partial unique index enforces exactly one `is_current` row per key; publishing supersedes rather than edits |
 | `enquiries` / `enquiry_messages` | Guest-visible messages and staff-only notes separated by a `visibility` column |
 | `ai_runs` / `ai_drafts` | Every provider call recorded with model, prompt version, status, latency and tokens. Drafts are `pending` until a human sends one |
-| `jobs` | The queue. `dedupe_key` makes a job at-most-once; a job is enqueued inside the business transaction, so it only becomes visible if that transaction commits |
-| `audit_log` | Append-only record of staff actions with before/after |
+| `jobs` | The queue. `dedupe_key` prevents duplicate enqueueing; handlers must tolerate retries; a job is enqueued inside the business transaction, so it only becomes visible if that transaction commits |
+| `audit_events` | Append-only record of staff actions with before/after |
 
 **Purchased amounts are immutable.** A booking stores what was paid. Later rate edits change
 future quotes and nothing else — verified by a test that mutates rates and re-reads old
@@ -146,8 +149,10 @@ quote  →  requireVerifiedGuest  →  atomic hold  →  mock payment attempt
        →  worker confirms       →  confirmation + simulated message
 ```
 
-- **Both email and phone must be verified** before a booking is accepted. Verification is
-  folded into checkout rather than being its own step.
+- **Both email and phone must be verified**, and registration completed, before a booking is accepted.
+  Email OTP or Google signs in an existing guest. New guests also verify their phone and confirm
+  their editable name. Sign-in uses a dedicated page and preserves the booking selection.
+  Signed-in guests review their details, continue to checkout and then use a separate test-payment step.
 - **`POST /bookings` requires an `Idempotency-Key`**, and the key must travel with a
   byte-identical body. The frontend stores the key next to the exact serialized body in
   `sessionStorage`, so a refresh or a retry replays instead of double-booking. An in-flight
@@ -191,7 +196,7 @@ provider call is in flight.
   when a guest books, so it is never in the approved facts the drafter is given. Describing what
   the estate has is allowed; saying it is free for the guest's dates is not.
 - **Nothing is ever sent automatically.** A draft is `pending` until a human sends it.
-- Dates in drafts come from the rate table, never from the model.
+- Prices in drafts come from backend pricing, never from the model.
 
 **Verified against the real provider**, not only against a stub: the three fixture enquiries
 classify correctly (0.95–0.99 confidence, 1.0–2.3 s), an injected "ignore your instructions,
@@ -223,9 +228,8 @@ main suite cover the handling of every malformed, uncertain and failed response.
 
 ## 10. Testing
 
-**329 passing backend tests across 34 files**, plus 10 opt-in live-provider tests, and 41
-frontend checks (`bun test` files plus three plain-assert scripts). Every test runs
-against a real PostgreSQL database — `TEST_DATABASE_URL`, a different database from the dev one,
+**Latest run: 332 passing backend tests, 10 skipped; 44 passing frontend tests**, alongside
+three plain-assert scripts. Backend integration tests run against a real PostgreSQL database — `TEST_DATABASE_URL`, a different database from the dev one,
 reset between tests. Nothing mocks the database.
 
 The tests that matter most are the ones that are hard to write: genuine parallel requests at the
@@ -233,8 +237,9 @@ last room with a barrier so they truly overlap; expiry without a fake clock; inj
 failures; crossing lock order to prove no deadlock; and a grep asserting the two HTTP trees
 share no imports.
 
-Test cases were written before the code they cover, named and recorded in `tests-phase1.md` and
-`tests-phase2.md`.
+Test plans and results are recorded in the repository. Final regression coverage includes nullable
+audit targets, existing/new guest registration, phone verification and registration completion.
+A final local HTTP walkthrough confirmed a booking with a succeeded mock payment.
 
 ## 11. What is not done, and what is not claimed
 
@@ -259,18 +264,19 @@ Stated plainly, because a reviewer finding these unannounced is worse than readi
   critical path, so it never blocks first render and never loads for a visitor who does not
   reach that section — but it is not split further, and on a slow connection the map is the
   slowest thing on the site.
-- **No rendered-UI verification.** The development environment had no browser, so every layout
-  claim rests on type-checking, lint, static render output and the check scripts.
+- **Final browser verification unavailable.** The final fixes were checked with types, lint, build,
+  automated tests and an HTTP walkthrough; a final visual browser pass is still required.
+- **No app-wide error boundary.** Unexpected rendering exceptions can still blank a route.
 - **No live Google OAuth call has ever been made.** The redirect flow is implemented and
   verified against its own contract, not against Google. The Gemini credential, by contrast, has
   been exercised for real, repeatedly.
 - **Mocked by design, per the brief:** payments, email and WhatsApp delivery, and all outside
   systems. Nothing here is a real payment integration.
 - **All data is synthetic.** Prices, tax snapshots, capacities, photography and copy are
-  invented and labelled as such in `03-decisions.md`. The only figure taken from the brief is
-  the 76-key total. No street address, map pin, award, review or facility beyond what the brief
-  establishes appears anywhere.
-- **No guest cancellation, date change, extension or room change** — explicitly out of scope.
+  invented and labelled as such in `03-decisions.md`. The 64-room/12-villa split comes from the brief. Room categories, rates, copy,
+  review content and regional map placement are illustrative, not claims about a real property.
+- **Cut from this build:** guest cancellation, date changes, extensions and room changes. The brief
+  excludes replacing the reservation system; it does not explicitly require these workflows.
 - Nothing here is claimed as deployed. See `deployment.md` for how to run it.
 
 ## 12. Where to read the detail
@@ -280,3 +286,49 @@ the schema and locking design, `05-invariants.md` for the 60 numbered invariants
 comments cite instead of re-explaining, `03-decisions.md` for every labelled assumption and its
 reason, `08-known-issues.md` for what is knowingly wrong and why, and `progress-log.md` for what
 was finished when, with the command output that proved it.
+
+
+## 13. UI and experience decisions
+
+| Screen | Design and reason |
+|---|---|
+| Home | Estate photography, restrained serif headings, off-white #F2F0EF surfaces and a black booking action. A central date pill makes the next action clear. The guest badge scrolls to reviews. |
+| Room selection | An image accordion exposes room choices and availability. Expanded cards link to detail pages; quantity controls build a multi-room selection. |
+| Room details | A controlled gallery, concise amenities and a prominent availability calendar. Selected dates carry through from the booking journey. |
+| Review and checkout | Room thumbnails, readable dates, minus/plus quantities, occupancy controls and one price summary. A single sign-in action avoids competing calls to action. |
+| Sign-in and registration | One email-first flow with Google or OTP. New guests verify phone, then confirm a name. The return destination and selection survive sign-in. |
+| Payment and confirmation | Explicit test-payment screen, pending feedback and confirmation reference. Server errors preserve context and explain the next action. |
+| Guest help and account | Bottom-right chat entry, sign-in after the first message, booking/payment history and previous website enquiry threads. Email/WhatsApp conversations stay on their originating channel. |
+| Employee console | Stable sidebar, compact sans-serif controls, understated cards and tables. Navigation reflects permissions; the API enforces them. |
+| Enquiries | Search and compact filters, List/Board toggle, three statuses: New, In progress, Resolved. Staff replies move work into progress automatically; resolution is explicit. No drag-to-change status. |
+| Rates and allotment | Room selector, standard settings and date-specific overrides. Preview before applying changes; history explains who changed what. Existing purchased prices remain unchanged. |
+
+Responsive layouts stack content on phones, keep tap targets usable and constrain galleries with
+object-fit. Loading skeletons reserve space during data fetches. Empty, failure and retry states
+are shown where data cannot be loaded. Motion is restrained and respects reduced-motion settings.
+The hero is compressed; galleries defer secondary images, console code and the interactive map are
+lazy-loaded. Actual slow-network performance remains to be measured.
+
+## 14. Explicit assumptions and next steps
+
+**Assumptions:** The Quiet Estate is a fictional brand; all guest identities, staff identities,
+room descriptions, prices, reviews and operational records are synthetic. The four room types
+are a design choice within the client's 76 keys. Room-only rates have no separately charged extra
+beds. Check-in is 14:00, checkout 11:00, in Asia/Kolkata. A booking permits up to four rooms and
+14 nights; quotes last five minutes and inventory holds ten minutes. These are implementation
+policies, not facts supplied by the client. AI confidence below 0.60 routes to review. Website
+allotment is an independent admin-maintained pool; there is no live agency-stock synchronisation.
+
+GST uses configured, versioned tax rules and stored booking snapshots; seeded rules are demo
+configuration, not a claim that legal/tax configuration has been independently validated. Hosting
+in India is required by the brief; actual service regions and residency have not been verified.
+The owner/GM/staff permission split and synthetic operating hours are product assumptions.
+
+**Next:** validate hosted sign-in/cookies and Google OAuth; confirm India hosting and tax
+configuration; connect real OTP delivery; add an app-wide error boundary; measure cold loads on
+slow mobile networks and trim Mapbox delivery. Beyond the trial, add monitored queue alerts,
+shared rate limiting for multiple API instances, backups/restore drills and a reservation-system
+export reconciliation process. Real payment and messaging integrations require a separate scope.
+
+The submission demonstrates the core booking and enquiry slice. It does not claim production
+readiness, live deployment, actual guest reviews or measured business-outcome improvements.

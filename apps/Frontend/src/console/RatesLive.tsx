@@ -48,7 +48,7 @@ type Room = {
 type RateDay = { stayDate: string; pricePaise: number; hasOverride: boolean; isBlackout: boolean };
 type InventoryDay = { stayDate: string; allotment: number; committed: number; remaining: number; isBlackout: boolean };
 type Affected = { stayDate: string; currentPricePaise: number | null; currentAllotment: number | null; currentIsBlackout: boolean };
-type Preview = { affected: Affected[]; conflicts: unknown[]; previewToken: string };
+type Preview = { affected: Affected[]; conflicts: Array<{ stayDate: string }>; previewToken: string };
 type HistoryEntry = { actorRole: string; action: string; createdAt: string; after: unknown };
 
 type Kind = 'Rate' | 'Allotment' | 'Blackout';
@@ -188,6 +188,9 @@ function OverrideDrawer({
               ))}
             </ul>
             {current.affected.length > 14 && <p className="c-muted">…and {current.affected.length - 14} more.</p>}
+            {current.conflicts.length > 0 && <p className="c-error" role="alert">
+              Existing bookings or holds prevent this change on {current.conflicts.map((day) => dateText(day.stayDate)).join(', ')}. Choose different dates or increase the room limit.
+            </p>}
             <p className="c-muted">
               Confirming replaces these dates only. Dates outside the range keep whatever they
               have now.
@@ -204,7 +207,7 @@ function OverrideDrawer({
             Cancel
           </button>
           {current ? (
-            <button type="button" className="c-primary" disabled={busy} onClick={() => void apply()}>
+            <button type="button" className="c-primary" disabled={busy || current.conflicts.length > 0} onClick={() => void apply()}>
               {busy ? 'Saving…' : removing ? 'Confirm removal' : 'Confirm and save'}
             </button>
           ) : (

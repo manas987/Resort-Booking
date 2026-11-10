@@ -144,8 +144,8 @@ async function holdInTransaction(input: {
     // Docs/10-phase1-backend-guest.md: no duplicate booking). "Live" is the same predicate
     // committed inventory uses (INV-10): once the first hold has lapsed it blocks nothing,
     // and nor should it block a retry.
-    const { rows: existingRows } = await client.query<{ reference: string }>(
-      `SELECT reference FROM bookings
+    const { rows: existingRows } = await client.query<{ id: string; reference: string }>(
+      `SELECT id, reference FROM bookings
          WHERE quote_id = $1
            AND (status = 'confirmed'
                 OR (status = 'pending_payment' AND hold_expires_at > now()))
@@ -157,7 +157,7 @@ async function holdInTransaction(input: {
       throw new AppError(
         'quote_already_booked',
         'This quote has already been booked. Open the booking, or get a new quote to book again.',
-        { reference: alreadyBooked.reference },
+        { bookingId: alreadyBooked.id, reference: alreadyBooked.reference },
       );
     }
 

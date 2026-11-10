@@ -7,6 +7,18 @@ import { LoadingSkeleton } from '../src/components/LoadingSkeleton';
 
 const source = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
 
+test('shared popovers stay inside a native modal top layer', () => {
+  const popover = source('../src/components/retro-pill/components/ui/popover.tsx');
+  expect(popover).toContain('querySelectorAll<HTMLDialogElement>("dialog[open]")');
+  expect(popover).toContain('<PopoverPrimitive.Portal container={modal}>');
+});
+
+test('enquiry triage is not hidden on normal laptop and mobile viewports', () => {
+  const css = source('../src/console/console.css');
+  expect(css).toMatch(/\.console \.c-thread-rail\s*\{\s*display: block/);
+  expect(css).not.toMatch(/\.console \.c-thread-rail\s*\{\s*display: none/);
+});
+
 test('styled dropdown preserves selected value, options, required and disabled form semantics', () => {
   const html = renderToStaticMarkup(<Select aria-label="Status" name="status" value="in_progress" required disabled onChange={() => {}}>
     <option value="new">New</option><option value="in_progress">In progress</option>

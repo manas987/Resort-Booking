@@ -303,7 +303,7 @@ export default function Bookings() {
               <button className="c-icon" aria-label="Previous month" onClick={() => shift(-1)}>
                 <ArrowLeft size={16} />
               </button>
-              <h2>{calendarView === 'Week' ? `${dateText(week)} · 7 days` : dateText(`${month}-01`).slice(3)}</h2>
+              <h2>{calendarView === 'Week' ? `${dateText(week)} · 7 days` : dateText(`${month}-01`).replace(/^\d+ /, '')}</h2>
               <button className="c-icon" aria-label="Next month" onClick={() => shift(1)}>
                 <ArrowRight size={16} />
               </button>

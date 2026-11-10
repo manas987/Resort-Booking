@@ -2608,7 +2608,8 @@
   }
 }
 .console .c-thread-rail {
-  display: none;
+  display: block;
+  min-width: 0;
 }
 .console .c-thread-workspace {
   min-width: 0;
@@ -2771,7 +2772,7 @@
 .c-thread-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .c-thread-head h2 { margin: 0 0 4px; }
 .c-thread-badges { display: flex; gap: 8px; flex-wrap: wrap; }
-.c-thread-grid { display: grid; grid-template-columns: 1.6fr 1fr; gap: 36px; align-items: start; }
+.c-thread-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 36px; align-items: start; }
 .c-thread-grid h3 { display: flex; align-items: center; gap: 7px; margin: 24px 0 10px; }
 .c-thread-grid h3:first-child { margin-top: 0; }
 .c-thread-grid textarea { width: 100%; }

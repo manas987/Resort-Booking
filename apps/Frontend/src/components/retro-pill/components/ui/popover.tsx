@@ -12,8 +12,10 @@ export function PopoverContent({
   collisionPadding = 12,
   ...props
 }: React.ComponentProps<typeof PopoverPrimitive.Content>) {
+  // Native modal dialogs live in the top layer; a body portal cannot appear above them.
+  const modal = typeof document === "undefined" ? undefined : Array.from(document.querySelectorAll<HTMLDialogElement>("dialog[open]")).at(-1);
   return (
-    <PopoverPrimitive.Portal>
+    <PopoverPrimitive.Portal container={modal}>
       <PopoverPrimitive.Content
         align={align}
         sideOffset={sideOffset}

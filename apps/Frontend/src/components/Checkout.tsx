@@ -51,6 +51,7 @@ export function Checkout({ arrival, departure, cart, onCart, onSignIn }: Props) 
   const [guestPhone, setGuestPhone] = useState('');
   const [bookingError, setBookingError] = useState('');
   const [existingReference, setExistingReference] = useState<string | undefined>();
+  const [existingBookingId, setExistingBookingId] = useState<string | undefined>();
   const [priceChanged, setPriceChanged] = useState<PriceChangedDetails | null>(null);
   const [conflictNights, setConflictNights] = useState<string[] | null>(null);
   const [payOutcome, setPayOutcome] = useState<PaymentAttemptOutcome>('succeed');
@@ -58,6 +59,20 @@ export function Checkout({ arrival, departure, cart, onCart, onSignIn }: Props) 
   const pollTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   const hasCart = cart.length > 0 && !!nights;
+
+  useEffect(() => {
+    if (!principal) return;
+    const controller = new AbortController();
+    apiFetch<{ profile: { name: string; email: string | null; phone: string | null } }>('/auth/me', { signal: controller.signal })
+      .then(({ profile }) => {
+        if (controller.signal.aborted) return;
+        setGuestName((value) => value || (profile.name === 'Guest' ? '' : profile.name));
+        setGuestEmail((value) => value || profile.email || '');
+        setGuestPhone((value) => value || profile.phone?.replace(/^\+91/, '') || '');
+      })
+      .catch(() => { /* Guest details remain editable if profile loading fails. */ });
+    return () => controller.abort();
+  }, [principal?.userId]); // eslint-disable-line react-hooks/exhaustive-deps -- only reload for a different guest
 
   /** A quote already paid for with a server round trip is worth recovering across a reload.
    *  Keyed by the exact stay it was priced for, so a stored id is never reused for a different
@@ -155,7 +170,7 @@ export function Checkout({ arrival, departure, cart, onCart, onSignIn }: Props) 
     }
   }
 
-  function pollBookingStatus(reference: string) {
+  function pollBookingStatus(reference: string, bookingId: string) {
     const startedAt = Date.now();
     pollTimer.current = setInterval(async () => {
       if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
@@ -170,7 +185,7 @@ export function Checkout({ arrival, departure, cart, onCart, onSignIn }: Props) 
           clearInterval(pollTimer.current);
           clearIdempotentRequest('qe_idem_booking');
           clearIdempotentRequest('qe_idem_payment');
-          navigate(`/booking/${reference}`);
+          navigate(`/booking/${bookingId}`);
         } else if (status.status === 'payment_failed' || status.status === 'expired') {
           clearInterval(pollTimer.current);
           setPaying(false);
@@ -190,6 +205,7 @@ export function Checkout({ arrival, departure, cart, onCart, onSignIn }: Props) 
     setPriceChanged(null);
     setConflictNights(null);
     setExistingReference(undefined);
+    setExistingBookingId(undefined);
     setPaying(true);
     try {
       const bookingBody = { quoteId: quote.quoteId, guestName, guestEmail, guestPhone };
@@ -210,7 +226,7 @@ export function Checkout({ arrival, departure, cart, onCart, onSignIn }: Props) 
       await apiFetch<CreatePaymentAttemptResponse>(`/payments/${booking.bookingId}/attempts`, {
         method: 'POST', body: paymentBody, idempotencyKey: paymentIdem.key,
       });
-      pollBookingStatus(booking.reference);
+      pollBookingStatus(booking.reference, booking.bookingId);
     } catch (error) {
       setPaying(false);
       if (!(error instanceof ApiError)) { setBookingError('Something went wrong. Please try again.'); return; }
@@ -228,6 +244,7 @@ export function Checkout({ arrival, departure, cart, onCart, onSignIn }: Props) 
           break;
         case 'quote_already_booked':
           setExistingReference((error.details as { reference?: string } | undefined)?.reference);
+          setExistingBookingId((error.details as { bookingId?: string } | undefined)?.bookingId);
           clearIdempotentRequest('qe_idem_booking');
           break;
         case 'price_changed':
@@ -268,6 +285,7 @@ export function Checkout({ arrival, departure, cart, onCart, onSignIn }: Props) 
     setPriceChanged(null);
     setConflictNights(null);
     setExistingReference(undefined);
+    setExistingBookingId(undefined);
     onCart(next);
   }
 
@@ -307,7 +325,7 @@ export function Checkout({ arrival, departure, cart, onCart, onSignIn }: Props) 
         })}
         <Link className="room-inline-link" href={`/book/select?${dates}`}>Edit selection <ArrowUpRight size={15} /></Link></>}
 
-        {existingReference && <div className="checkout-notice" role="alert">This stay is already booked. <Link href={`/booking/${existingReference}`}>View your booking <ArrowUpRight size={14} /></Link></div>}
+        {existingReference && <div className="checkout-notice" role="alert">This stay is already booked. <Link href={existingBookingId ? `/booking/${existingBookingId}` : '/account/bookings'}>View your booking <ArrowUpRight size={14} /></Link></div>}
         {conflictNights && <div className="checkout-notice" role="alert">These nights are no longer available: {conflictNights.join(', ')}. <Link href={`/book/select?${dates}`}>Change your selection</Link></div>}
         {priceChanged && <div className="checkout-notice" role="alert">Prices changed — new total {formatPaise(priceChanged.totalPaise)}. <button type="button" className="room-inline-link" onClick={acknowledgePriceChange}>Accept the new total</button></div>}
         {bookingError && <p role="alert" className="signin-error">{bookingError}</p>}
@@ -320,7 +338,7 @@ export function Checkout({ arrival, departure, cart, onCart, onSignIn }: Props) 
           <label htmlFor="co-guest-email">Email</label>
           <input id="co-guest-email" type="email" autoComplete="email" required value={guestEmail} onChange={(e) => setGuestEmail(e.target.value)} />
           <label htmlFor="co-guest-phone">Mobile number</label>
-          <div className="signin-phone"><span>+91</span><input id="co-guest-phone" type="tel" inputMode="numeric" pattern="[6-9][0-9]{9}" minLength={10} maxLength={10} required value={guestPhone} onChange={(e) => setGuestPhone(e.target.value.replace(/\D/g, ''))} /></div>
+          <div className="signin-phone"><span>+91</span><input id="co-guest-phone" type="tel" inputMode="numeric" pattern="[0-9]{10}" minLength={10} maxLength={10} required value={guestPhone} onChange={(e) => setGuestPhone(e.target.value.replace(/\D/g, ''))} /></div>
         </fieldset></form> : !principal ? <section className="checkout-auth">
           <div><h2>Make it your stay.</h2><p>Sign in to add your details and complete your booking.</p></div>
         </section> : null}

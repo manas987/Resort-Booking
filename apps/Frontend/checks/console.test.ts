@@ -175,6 +175,11 @@ describe('the wired Rates screen keeps the backend as the authority', () => {
     expect(source).toContain('preview?.signature === signature');
   });
 
+  test('server-reported conflicts are visible and prevent confirming an inventory change', () => {
+    expect(source).toContain('Existing bookings or holds prevent this change');
+    expect(source).toContain('disabled={busy || current.conflicts.length > 0}');
+  });
+
   test('the oversell rule is not re-implemented client-side', () => {
     // assertAvailable rejects an allotment below committed usage inside the write transaction
     // and names the dates. A second copy here could only be weaker, and could disagree.
