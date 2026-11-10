@@ -150,7 +150,11 @@ Error branches, each with its required UI response:
 by `/account/bookings`.
 
 `GET /bookings/reference/:reference/status` `requireGuest` — cheap poll, `{reference, status,
-holdExpiresAt}`. Used by `/checkout` while waiting for the worker to confirm payment.
+holdExpiresAt, paymentStatus}`. `paymentStatus` is the latest payment attempt's status, or null
+before any attempt. A failed payment leaves the booking hold pending so the guest can retry:
+stop polling on that failure, clear only the payment idempotency key, and preserve the booking
+key while its hold is live. Confirmation links use the booking UUID, never its human reference.
+`quote_already_booked` details include both `bookingId` and `reference` for recovery.
 
 `GET /bookings/:bookingId` `requireGuest` — full `Booking`. Used by `/booking/:bookingId` and
 `/account/bookings`' detail view. `status`: `pending_payment | confirmed |

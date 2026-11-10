@@ -300,7 +300,9 @@ function Enquiries() {
 
 function Profile() {
   const principal = usePrincipal();
-  const [name, setName] = useState('');
+  const { data: identity } = useResource<{ profile: { name: string } }>((signal) => apiFetch('/auth/me', { signal }), [principal?.userId]);
+  const [name, setName] = useState<string | null>(null);
+  const displayedName = name ?? identity?.profile.name ?? '';
   const [nameBusy, setNameBusy] = useState(false);
   const [nameDone, setNameDone] = useState('');
   const [nameError, setNameError] = useState('');
@@ -320,7 +322,7 @@ function Profile() {
     setNameError('');
     setNameDone('');
     try {
-      const result = await apiFetch<{ name: string }>('/account/profile', { method: 'PATCH', body: { name: name.trim() } });
+      const result = await apiFetch<{ name: string }>('/account/profile', { method: 'PATCH', body: { name: displayedName.trim() } });
       setNameDone(`Saved as ${result.name}.`);
     } catch (error) {
       setNameError(error instanceof ApiError ? error.message : 'Couldn’t save that. Please try again.');
@@ -386,7 +388,7 @@ function Profile() {
             required
             maxLength={100}
             autoComplete="name"
-            value={name}
+            value={displayedName}
             onChange={(event) => setName(event.target.value)}
             placeholder="Your full name"
           />

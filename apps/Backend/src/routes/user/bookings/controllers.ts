@@ -135,9 +135,11 @@ export async function readBookingStatusController(
 ): Promise<void> {
   const guest = currentGuest(response);
   try {
-    const { rows } = await pool.query<{ reference: string; status: string; hold_expires_at: string | null }>(
-      `SELECT reference, status, hold_expires_at FROM bookings
-        WHERE reference = $1 AND guest_user_id = $2`,
+    const { rows } = await pool.query<{ reference: string; status: string; hold_expires_at: string | null; payment_status: string | null }>(
+      `SELECT b.reference, b.status, b.hold_expires_at,
+              (SELECT p.status FROM payments p WHERE p.booking_id = b.id
+                 ORDER BY p.attempt_no DESC LIMIT 1) AS payment_status
+         FROM bookings b WHERE b.reference = $1 AND b.guest_user_id = $2`,
       [request.params.reference, guest.userId],
     );
     const booking = rows[0];
@@ -146,6 +148,7 @@ export async function readBookingStatusController(
       reference: booking.reference,
       status: booking.status,
       holdExpiresAt: booking.hold_expires_at,
+      paymentStatus: booking.payment_status,
     });
   } catch (error) {
     next(error);

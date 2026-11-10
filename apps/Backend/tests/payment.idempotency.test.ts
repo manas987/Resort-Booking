@@ -193,6 +193,37 @@ describe('payment.idempotency — 1G (pre-payment-system subset)', () => {
     expect(rows[0]!.n).toBe(1); // polling never creates a second row
   });
 
+  it('status polling exposes a decline and then the latest retry without creating another hold', async () => {
+    const room = await createRoomType({ baseAllotment: 1, physicalStock: 1 });
+    const guest = await createGuest();
+    const id = await quoteId(room.id);
+    const response = await post('/api/user/bookings', {
+      quoteId: id, guestName: 'Retry Guest', guestEmail: 'retry@example.com', guestPhone: '9000000000',
+    }, guest.accessToken, crypto.randomUUID());
+    expect(response.status).toBe(201);
+    const { bookingId, reference } = await response.json() as { bookingId: string; reference: string };
+    const path = `/api/user/bookings/reference/${reference}/status`;
+    const poll = async () => await (await get(path, guest.accessToken)).json() as { paymentStatus: string | null; status: string };
+    expect((await poll()).paymentStatus).toBeNull();
+
+    for (const eventType of ['failed', 'succeeded'] as const) {
+      const { paymentId, eventKey } = await withTransaction(async (client) => {
+        const attempt = await beginPaymentAttempt(client, { bookingId, amountPaise: 100 });
+        const event = await client.query<{ event_key: string }>('SELECT event_key FROM payment_events WHERE payment_id = $1', [attempt.paymentId]);
+        return { paymentId: attempt.paymentId, eventKey: event.rows[0]!.event_key };
+      });
+      expect((await poll()).paymentStatus).toBe('processing');
+      await confirmMockPayment({ paymentId, eventKey, eventType });
+      const state = await poll();
+      expect(state.paymentStatus).toBe(eventType);
+      expect(state.status).toBe(eventType === 'failed' ? 'pending_payment' : 'confirmed');
+    }
+    const counts = await pool.query<{ bookings: number; payments: number }>(
+      'SELECT (SELECT count(*)::int FROM bookings) AS bookings, (SELECT count(*)::int FROM payments) AS payments',
+    );
+    expect(counts.rows[0]).toEqual({ bookings: 1, payments: 2 });
+  });
+
   it('ID-6: the same ledger event_key delivered twice confirms once — the second is a no-op (INV-11)', async () => {
     const room = await createRoomType({ baseAllotment: 5, physicalStock: 5 });
     const guest = await createGuest();

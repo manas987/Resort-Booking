@@ -228,7 +228,7 @@ main suite cover the handling of every malformed, uncertain and failed response.
 
 ## 10. Testing
 
-**Latest run: 332 passing backend tests, 10 skipped; 44 passing frontend tests**, alongside
+**Latest run (10 Nov): 333 passing backend tests, 10 skipped; 51 passing frontend tests**, alongside
 three plain-assert scripts. Backend integration tests run against a real PostgreSQL database — `TEST_DATABASE_URL`, a different database from the dev one,
 reset between tests. Nothing mocks the database.
 
@@ -264,8 +264,9 @@ Stated plainly, because a reviewer finding these unannounced is worse than readi
   critical path, so it never blocks first render and never loads for a visitor who does not
   reach that section — but it is not split further, and on a slow connection the map is the
   slowest thing on the site.
-- **Final browser verification unavailable.** The final fixes were checked with types, lint, build,
-  automated tests and an HTTP walkthrough; a final visual browser pass is still required.
+- **Local browser checks completed on 10 Nov.** Booking confirmation, declined-payment retry,
+  guest/staff conversations, map controls and console views were exercised in the browser.
+  Phone-width room details and availability were checked; this is not a device-lab or hosted test.
 - **No app-wide error boundary.** Unexpected rendering exceptions can still blank a route.
 - **No live Google OAuth call has ever been made.** The redirect flow is implemented and
   verified against its own contract, not against Google. The Gemini credential, by contrast, has

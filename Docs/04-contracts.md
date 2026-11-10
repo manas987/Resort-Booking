@@ -1,5 +1,9 @@
 # Contracts
 
+10 Nov browser verification: booking-status polls additionally return nullable `paymentStatus`
+for the latest attempt. Decline leaves the live hold pending for retry. `quote_already_booked`
+details include `bookingId` alongside `reference`; see `14-frontend-api-map.md`.
+
 9 Nov auth revision: Principal includes optional onboardingComplete, reloaded from the
 database by middleware. New guests cannot book until this is true as well as both contact
 verification flags. /auth/me additionally returns needsOnboarding and the caller's own

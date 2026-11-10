@@ -5,8 +5,9 @@
 There is still no app-wide render error boundary; a different uncaught render error can
 blank the app. The nullable Activity target crash is fixed without adding fallback UI.
 The payment card panel is decorative, uses read-only sample values and never sends card data.
-It is a mock payment adapter, not a live payment integration. Browser control timed out:
-live API and database checks do not establish visual/browser or live Google-provider success.
+It is a mock payment adapter, not a live payment integration. Browser checking became available
+on 10 Nov: booking, decline/retry, guest/staff conversations and console screens were exercised
+against localhost. See `../browser-qa.md`; hosted deployment and live Google remain unverified.
 OTP delivery remains mocked; codes are exposed only for the configured reviewer allowlist.
 
 ## Console presentation update — 9 Nov 2026

@@ -4,20 +4,15 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { formatPaise } from '../lib/money';
 import { useResource } from '../lib/useResource';
+import { availabilityWindow, toIsoDate } from '../lib/availabilityDates';
 import type { AvailabilityCalendarResponse } from '../lib/types';
 
 const WEEKDAYS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 const HORIZON_DAYS = 365; // mirrors apps/Backend/src/core/policy.ts stay.bookingHorizonDays — a UX guard, not the authority
 
 function resortToday(): Date {
-  // Browser-local "today" is a display nicety here, not an authority — the backend's own
-  // Asia/Kolkata "today" is what every request is actually checked against server-side.
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
-}
-
-function toIsoDate(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+  return new Date(`${day}T00:00:00`);
 }
 
 function addDays(date: Date, days: number): Date {
@@ -47,8 +42,7 @@ export function AvailabilityCalendar({ slug, checkIn, checkOut }: Props) {
   const [monthOffset, setMonthOffset] = useState(0);
   const [retryKey, setRetryKey] = useState(0);
   const viewStart = useMemo(() => addMonths(today, monthOffset), [today, monthOffset]);
-  const windowFrom = toIsoDate(viewStart);
-  const windowTo = toIsoDate(addDays(addMonths(viewStart, 2), -1));
+  const { from: windowFrom, to: windowTo } = availabilityWindow(today, monthOffset);
   const canGoNext = Date.parse(windowTo) < Date.parse(toIsoDate(addDays(today, HORIZON_DAYS)));
 
   const { data, loading, error } = useResource<AvailabilityCalendarResponse>(

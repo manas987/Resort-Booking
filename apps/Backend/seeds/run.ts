@@ -217,9 +217,12 @@ async function seedRoomTypes() {
 
   // A blackout night and a sold-out night (via a zero allotment override — distinct from a
   // real commitment-driven sell-out, which the mixed-room booking below also produces).
+  const blackoutDate = futureDate(40);
+  // Relative dates must not collide with the fixed festival booking as the review day changes.
+  const blackoutNight = blackoutDate >= festivalStart && blackoutDate <= festivalEnd ? futureDate(60) : blackoutDate;
   await pool.query(
     `INSERT INTO room_day (room_type_id, stay_date, is_blackout) VALUES ($1, $2, true)`,
-    [coffeeVilla.id, futureDate(40)],
+    [coffeeVilla.id, blackoutNight],
   );
   await pool.query(
     `INSERT INTO room_day (room_type_id, stay_date, allotment) VALUES ($1, $2, 0)`,
@@ -340,10 +343,10 @@ async function seedBookingsAndPayments(rooms: {
   // 2. A mixed-room booking (also exercises multi-night price differences via the festival
   // window on the Estate Room leg).
   const [festivalStart] = nextDecemberRange(20, 31);
-  const mixedCheckIn = festivalStart;
-  const mixedCheckOut = futureDate(
-    Math.round((new Date(`${festivalStart}T00:00:00Z`).getTime() - Date.now()) / 86_400_000) + 2,
-  );
+  const mixedCheckIn = festivalStart < futureDate(0) ? futureDate(0) : festivalStart;
+  const mixedEnd = new Date(`${mixedCheckIn}T00:00:00Z`);
+  mixedEnd.setUTCDate(mixedEnd.getUTCDate() + 2);
+  const mixedCheckOut = mixedEnd.toISOString().slice(0, 10);
   const mixedQuote = await quoteFor(
     mixedCheckIn, mixedCheckOut,
     [

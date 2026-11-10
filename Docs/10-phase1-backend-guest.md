@@ -175,7 +175,7 @@ question, answered here so it is not invented twice:
 - Signed in → stamp it with the principal.
 - A quote is **single-use**: it is spent by the booking it produced. A second hold on a quote
   that already has a live booking (confirmed, or a hold that has not lapsed) is
-  `409 quote_already_booked`, carrying the existing reference so the client can show the
+  `409 quote_already_booked`, carrying the existing `bookingId` and `reference` so the client can show the
   booking it already has. The quote row is taken `FOR UPDATE`, so two parallel presentations
   serialise rather than both reading "no booking yet". An `Idempotency-Key` cannot cover this:
   a double-click that regenerates its key is a different request by definition (Goal 7).

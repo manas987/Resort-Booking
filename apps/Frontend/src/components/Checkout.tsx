@@ -180,14 +180,16 @@ export function Checkout({ arrival, departure, cart, onCart, onSignIn }: Props) 
         return;
       }
       try {
-        const status = await apiFetch<{ reference: string; status: string }>(`/bookings/reference/${reference}/status`);
+        const status = await apiFetch<{ reference: string; status: string; paymentStatus: string | null }>(`/bookings/reference/${reference}/status`);
         if (status.status === 'confirmed') {
           clearInterval(pollTimer.current);
           clearIdempotentRequest('qe_idem_booking');
           clearIdempotentRequest('qe_idem_payment');
           navigate(`/booking/${bookingId}`);
-        } else if (status.status === 'payment_failed' || status.status === 'expired') {
+        } else if (status.paymentStatus === 'failed' || status.status === 'payment_failed' || status.status === 'expired') {
           clearInterval(pollTimer.current);
+          clearIdempotentRequest('qe_idem_payment');
+          if (status.status !== 'pending_payment') clearIdempotentRequest('qe_idem_booking');
           setPaying(false);
           setBookingError(status.status === 'expired' ? 'Your hold expired before payment completed.' : 'That payment attempt failed. Try again below.');
         }
@@ -238,6 +240,7 @@ export function Checkout({ arrival, departure, cart, onCart, onSignIn }: Props) 
           break;
         }
         case 'quote_expired':
+          setBookingError('Your price quote expired. Review the refreshed total, then press Pay now again.');
           setQuoteError('Your quote expired. Getting a fresh one…');
           clearIdempotentRequest('qe_idem_booking');
           fetchQuote(promoApplied);

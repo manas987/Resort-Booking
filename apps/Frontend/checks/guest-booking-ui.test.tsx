@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { Router } from 'wouter';
 import { Checkout } from '../src/components/Checkout';
 import { AvailabilityCalendar } from '../src/components/AvailabilityCalendar';
+import { availabilityWindow } from '../src/lib/availabilityDates';
 import { ImageAccordion } from '../src/components/bencho/ImageAccordion';
 import { addLine, restoreCart } from '../src/data/cart';
 import { clearSession, setSession, finishRestoring } from '../src/lib/session';
@@ -142,6 +143,13 @@ test('checkout accepts the reserved reviewer phone and reads existing guest deta
   } finally { clearSession(); }
 });
 
+test('checkout detects a failed attempt while preserving its live booking hold for retry', () => {
+  const checkout = source('../src/components/Checkout.tsx');
+  expect(checkout).toContain("status.paymentStatus === 'failed'");
+  expect(checkout).toContain("if (status.status !== 'pending_payment') clearIdempotentRequest('qe_idem_booking')");
+  expect(checkout).toContain('Review the refreshed total');
+});
+
 test('room availability is read-only and does not turn a loading state into sold-out dates', () => {
   const html = renderToStaticMarkup(<AvailabilityCalendar slug="garden-suite" checkIn="2026-11-12" checkOut="2026-11-19" />);
   expect(html).toContain('Checking availability');
@@ -153,4 +161,10 @@ test('room availability is read-only and does not turn a loading state into sold
   const details = source('../src/components/RoomDetails.tsx');
   expect(details).toContain('<strong>Check availability</strong>');
   expect(details).not.toContain('Add a room to your stay using + above.');
+});
+
+test('availability requests never start in the past and include the final displayed night', () => {
+  expect(availabilityWindow(new Date(2026, 10, 10), 0)).toEqual({ from: '2026-11-10', to: '2027-01-01' });
+  expect(availabilityWindow(new Date(2026, 10, 10), 1)).toEqual({ from: '2026-12-01', to: '2027-02-01' });
+  expect(availabilityWindow(new Date(2028, 1, 29), 0)).toEqual({ from: '2028-02-29', to: '2028-04-01' });
 });

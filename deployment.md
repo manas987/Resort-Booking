@@ -306,9 +306,10 @@ The reference appears on the confirmation page and in `psql`.
 
 ## 14. Known deployment limitations
 
-Latest local checks: 44 frontend tests passed; backend: 332 passed, 10 skipped, no failures.
-A local HTTP walkthrough completed a confirmed booking and succeeded mock payment. Browser
-visual checks and live Google OAuth were not verified during the final fixes.
+Latest local checks (10 Nov): 51 frontend tests passed; backend: 333 passed, 10 skipped, no failures.
+Browser walkthroughs confirmed booking, payment decline/retry, guest/staff conversations,
+console role visibility, room details and the map controls. Hosted deployment and live Google
+OAuth remain unverified. Full details are in `browser-qa.md` in the repository.
 
 Stated here rather than discovered later.
 
